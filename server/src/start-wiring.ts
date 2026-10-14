@@ -6,7 +6,9 @@
  * router, and the per-project lookups the daemon closes over. `daemon-parity.test.ts` checks both
  * entry points still call them.
  */
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { worktreeTwins } from './command/cli/config/checkout.js';
 import { cpus, homedir } from 'node:os';
 import { bridgeWsUrl, EventType, ReticleDir, ReticleEnv } from '@reticlehq/core';
 import { fetchPlatformConfig } from '@/features/harness/platform-config.js';
@@ -189,9 +191,14 @@ export function sdkFixForProject(projectId?: string): string {
  * not. Deciding that here would mean reading every cloud.json on every tick.
  */
 export function knownProjectRoots(): string[] {
+  const directories = knownProjectCandidates().map((c) => c.directory);
+  // A page served from a git worktree writes its runs into that worktree's copy of the project.
+  const twins = directories
+    .flatMap(worktreeTwins)
+    .filter((d) => existsSync(join(d, ReticleDir.ROOT)));
   return [
     ...new Set([
-      ...knownProjectCandidates().map((c) => join(c.directory, ReticleDir.ROOT)),
+      ...[...directories, ...twins].map((d) => join(d, ReticleDir.ROOT)),
       // A lease opened with `root` writes there; without this, that work is never sent.
       ...claimedArtifactRoots(),
     ]),
