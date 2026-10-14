@@ -3,6 +3,7 @@ import { coveragePercents } from './features/exhaust/ledger.js';
 import { agentWiring } from './portal/session/zero-install-first-call.js';
 import { pushIfMoved, watchAccountFiles } from './memory/impact/account-watch.js';
 import { SESSION_FILE } from './command/cli/cloud-kit.js';
+import { signedInTo } from './command/cli/auth/cloud-session.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { linkedCloudPort, sessionCloudPort } from './memory/cloud/cloud-config.js';
@@ -212,15 +213,14 @@ export async function start(options: StartOptions = {}): Promise<RunningServer> 
    * here, and their work waited on disk for a later daemon. It does nothing for an unlinked root,
    * and `close` sends one last bounded cycle.
    */
-  // The same client version the daemon's sync sends, so the server can tell the two apart.
-  const syncClient = { clientVersion: SERVER_VERSION };
   const cloudSync = attachCloudSync({
     fs: createNodeFileSystem(),
     reticleRoot: options.reticleRoot ?? join(process.cwd(), ReticleDir.ROOT),
     homeDir: homedir(),
     env: process.env,
     otherRoots: knownProjectRoots,
-    ...syncClient,
+    clientVersion: SERVER_VERSION,
+    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
   });
   const security = await resolveBridgeSecurityWithAutoToken(options);
   const bridge = new Bridge({ port, sdkFix: sdkFixForProject, ...security });
@@ -515,6 +515,7 @@ export async function startDaemon(options: StartOptions = {}): Promise<RunningSe
     env: process.env,
     otherRoots: knownProjectRoots,
     clientVersion: SERVER_VERSION,
+    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
   });
   syncNudge.run = (): void => cloudSync.nudge();
   // `syncNow`, not `nudge` (a cycle soon): somebody is watching the button. Never awaited.

@@ -69,7 +69,7 @@ import {
   projectIdOf,
   RETICLE_CONFIG_FILE,
 } from '@/detect/existing-config.js';
-import { CLAUDE_SETTINGS_PATH, claudeSettingsSteps } from './stop-hook-step.js';
+import { CLAUDE_SETTINGS_PATH, claudeSettingsSteps, promptHookSteps } from './stop-hook-step.js';
 import {
   PRETTIERIGNORE_PATH,
   RETICLE_IGNORE_ENTRY,
@@ -954,7 +954,9 @@ export function buildPlan(input: PlanInput): Plan {
       stop: true === input.hooks,
       // Beside the CLAUDE.md rule: the same agent, the same consent to write its instruction files.
       compact: input.options.mcp && input.claudeCli,
+      prompt: true === input.claudePromptHook,
     }),
+    ...promptHookSteps(input.promptHooks ?? [], true === input.claudePromptHook),
     ...uiLibraryStep(input),
     ...webGlCanvasStep(input),
     installStep(input),
