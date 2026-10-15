@@ -7,6 +7,7 @@ import {
   NATIVE_INPUT_ARG,
   SettleReason,
 } from '@reticlehq/core';
+import { isHiddenNativeOption } from '@/dom/query.js';
 import { asSyntheticInput } from './synthetic/synthetic-input.js';
 import { echoRef, refs } from '@/dom/addressing/refs.js';
 import {
@@ -202,6 +203,11 @@ function assertActionAllowed(
   ) {
     throw new Error(
       `potentially destructive action blocked; retry with args.${DANGEROUS_ACTION_CONFIRM_ARG}=true`,
+    );
+  }
+  if (CLICK_LIKE.has(action) && el instanceof HTMLElement && isHiddenNativeOption(el)) {
+    throw new Error(
+      'cannot click a native <option> inside a visually-hidden <select> — open the dropdown and target the visible option',
     );
   }
 }
