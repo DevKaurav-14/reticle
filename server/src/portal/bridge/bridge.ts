@@ -49,22 +49,27 @@ import { protocolSkewReason } from './protocol-skew.js';
 import { SERVER_VERSION } from '@/command/version/identity/server-version.js';
 
 /**
- * Take the mutable half of a session's identity from a repeat HELLO.
- *
- * Lives here rather than on Session because this is where the protocol decision is made — the caller
- * has already established that the hello belongs to this same session — and because these fields are
- * the session's public surface, read by the tools on every listing.
- *
- * `hasCapabilities` is the one that matters: it is announced in the hello, which the SDK sends at
- * connect(), while capabilities are registered AFTER connect by design (registerStore needs a live
- * SDK to subscribe through). Without this refresh, an app that declared its entire testable surface
- * reported `hasCapabilities: false` forever.
+ * Take the mutable half of a session's identity from a repeat HELLO; the caller has established the
+ * hello belongs to this session. `hasCapabilities` matters most: capabilities register AFTER
+ * connect() by design, so without this an app that declared its whole testable surface reported
+ * `hasCapabilities: false` forever. A project id that arrives late is taken by `adoptProject`.
  */
 function refreshIdentity(session: Session, hello: HelloMessage): void {
   session.url = hello.url;
   session.title = hello.title;
   session.adapters = hello.adapters;
   session.hasCapabilities = hello.hasCapabilities ?? false;
+}
+
+/** Run every handler; one that throws is not a reason to drop the session or skip the rest. */
+function fireEach(handlers: ReadonlyArray<(session: Session) => void>, session: Session): void {
+  for (const handler of handlers) {
+    try {
+      handler(session);
+    } catch {
+      /* the session stays */
+    }
+  }
 }
 
 /** A human clicked ▶ on a saved flow in the panel — replay it with no agent. Wired by the daemon. */
@@ -325,6 +330,7 @@ export class Bridge {
    * stops working, quietly" is a trap; anything that needs to run on a new session now simply runs.
    */
   readonly #onSessionCreate: Array<(session: Session) => void> = [];
+  readonly #onProjectAdopted: Array<(session: Session) => void> = [];
   /** Fired when a session is removed — flushes its journal tail + persists what it learned. */
   #onSessionEnd: ((session: Session) => Promise<void>) | undefined;
   /** Wired by the daemon: push to the dashboard now, because somebody asked in the panel. */
@@ -610,6 +616,10 @@ export class Bridge {
               return;
             }
             refreshIdentity(session, parsed);
+            if (parsed.projectId !== undefined && session.adoptProject(parsed.projectId)) {
+              this.#servedProjects.add(parsed.projectId);
+              fireEach(this.#onProjectAdopted, session);
+            }
             return;
           }
           if (this.#token !== undefined && !tokensMatch(this.#token, parsed.token)) {
@@ -653,13 +663,7 @@ export class Bridge {
           // Attach the durable journal (and anything else registered) before any events stream in.
           // One throwing handler must not stop the others, or the order of registration would decide
           // which features survive a bad frame.
-          for (const handler of this.#onSessionCreate) {
-            try {
-              handler(session);
-            } catch {
-              /* a handler that failed is not a reason to drop the session */
-            }
-          }
+          fireEach(this.#onSessionCreate, session);
           // A tab that has just connected has no impact record yet, so the report would read "nothing
           // recorded" over a file with a month of history in it. Push what is already on disk as soon
           // as there is somewhere to push it to; a session is also a thing that HAPPENED, so it counts.
@@ -955,6 +959,11 @@ export class Bridge {
   /** Register a handler to run when a session connects. Additive — every handler runs. */
   attachSessionCreate(handler: (session: Session) => void): void {
     this.#onSessionCreate.push(handler);
+  }
+
+  /** Run `handler` when a session that connected without a project id names one in a later HELLO. */
+  attachProjectAdopted(handler: (session: Session) => void): void {
+    this.#onProjectAdopted.push(handler);
   }
 
   close(): Promise<void> {

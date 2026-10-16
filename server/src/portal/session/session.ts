@@ -99,8 +99,15 @@ export class Session implements HandshakeFacts {
    * MINTED HERE. This is one of the two places a projectId enters the daemon with its provenance
    * intact: the field is `projectId` on a zod-parsed HELLO, so the page said what it is. Every
    * downstream reader takes the brand from this property rather than re-blessing a string.
+   * Set once more, by `adoptProject`, when a page that said nothing names its project later.
    */
-  readonly projectId: ProjectId | undefined;
+  projectId: ProjectId | undefined;
+  /** Take a later HELLO's project id when the first carried none. A set project is kept. */
+  adoptProject(projectId: string): boolean {
+    if (this.projectId !== undefined) return false;
+    this.projectId = asProjectId(projectId);
+    return true;
+  }
   /**
    * The `.reticle` directory this session's evidence belongs in — impact counters AND capsules.
    * Stamped once, from the project it declared in HELLO, so every counter agrees where it goes.

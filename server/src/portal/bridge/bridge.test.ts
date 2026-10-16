@@ -276,6 +276,31 @@ describe('a repeat hello is an identity refresh, not a violation', () => {
     await bridge.close();
   });
 
+  // An app that calls connect() itself sends its first HELLO without a project; the build plugin's
+  // connect({ projectId }) comes after. The id has to reach the session, or its evidence stays in
+  // unmatched/ for the whole session.
+  it('adopts a project id that arrives after the first hello, and re-stamps the session', async () => {
+    const bridge = new Bridge({ port: 0 });
+    const adopted: string[] = [];
+    bridge.attachProjectAdopted((s) => adopted.push(String(s.projectId)));
+    const port = await bridge.ready;
+    const browser = new FakeBrowser(port, 'late-id', false);
+    await browser.open();
+    await waitUntil(() => 1 === bridge.sessions.count());
+    expect(bridge.sessions.get('late-id')?.projectId).toBeUndefined();
+
+    browser.reannounce({ projectId: 'shop' });
+    await waitUntil(() => undefined !== bridge.sessions.get('late-id')?.projectId);
+    browser.reannounce({ projectId: 'admin' });
+    browser.reannounce({ hasCapabilities: true });
+    await waitUntil(() => true === bridge.sessions.get('late-id')?.hasCapabilities);
+
+    expect(bridge.sessions.get('late-id')?.projectId).toBe('shop');
+    expect(adopted).toEqual(['shop']);
+    browser.close();
+    await bridge.close();
+  });
+
   it('still rejects a hello claiming a DIFFERENT session — that is what the guard is for', async () => {
     const bridge = new Bridge({ port: 0 });
     const port = await bridge.ready;
