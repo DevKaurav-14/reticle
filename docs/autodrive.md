@@ -73,6 +73,7 @@ The platform drives with Jev, a System One model that answers typed questions an
 - A journey that names a page it has not reached ("then turn on automatic refunds in Settings") is not finished. The Harness goes there instead of stopping.
 - A dialog whose destructive action already ran is closed rather than treated as the end of the journey.
 - A control the destructive-action gate refused is a write, so the Harness always claims a request or a signal for it. A save the server rejects then fails visibly instead of passing as nothing to prove.
+- The Harness takes an outward action (invite, send, share, delete, publish, revoke, sign out, change a role, create a key, change an item's state) only when the person's journey asks for it in so many words. Paying is not read from a button's words: "Start free trial", "Upgrade", "Subscribe" and "Place order" are pressed like any other control. Money moves when somebody types card or bank details (a field whose autocomplete is `cc-number`, `cc-csc` or `cc-exp`, or whose name or label says card number, CVC, expiry or IBAN) or leaves for a payment provider (Stripe, Dodo Payments checkout, Paddle, Lemon Squeezy, PayPal, Razorpay, Braintree). The Harness does those two only when the journey asks to pay.
 
 ## Turning it off, and who pays for it
 

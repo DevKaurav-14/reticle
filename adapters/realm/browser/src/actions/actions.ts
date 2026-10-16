@@ -14,6 +14,7 @@ import {
   dangerousActionContext,
   requiresDangerousConfirmation,
   assertOutwardAllowed,
+  assertPaymentEntryAllowed,
   submitControlFor,
 } from './danger-context.js';
 import {
@@ -189,6 +190,7 @@ function assertActionAllowed(
     action === ActionType.PRESS && 'Enter' === pressKey(args) ? submitControlFor(el) : null;
   if (canTrigger)
     assertOutwardAllowed([el, submitter, isActionTarget(dragTarget) ? dragTarget : null]);
+  if (action === ActionType.FILL || action === ActionType.TYPE) assertPaymentEntryAllowed(el);
   const sourceDangerous =
     requiresDangerousConfirmation(dangerousActionContext(el), getRole(el)) ||
     (submitter !== null &&

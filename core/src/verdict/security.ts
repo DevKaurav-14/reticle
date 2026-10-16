@@ -185,11 +185,76 @@ const OUTWARD_WORDS: readonly (readonly [OutwardAction, RegExp])[] = [
   ],
 ];
 
-/** The outward action a control would take, from its text and role; value pickers take none. */
+/*
+ * The payment boundary. "Start free trial" was refused as "would need to pay" on 3 of 4 explores:
+ * the words on a button (trial, upgrade, subscribe, checkout) say nothing about whether money moves
+ * on an app under test. Money moves when somebody types card or bank details, or leaves for a payment
+ * provider, so those are the two things a Harness drive that was not asked to pay refuses.
+ */
+
+/** The origins of the payment providers an app sends a buyer to. A host or any subdomain of it. */
+export const PAYMENT_PROVIDER_HOSTS = [
+  'stripe.com',
+  'checkout.dodopayments.com',
+  'paddle.com',
+  'lemonsqueezy.com',
+  'paypal.com',
+  'razorpay.com',
+  'braintreegateway.com',
+] as const;
+
+/** Is this an absolute URL on a payment provider's origin? A relative URL stays on the app. */
+export function isPaymentProviderUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return PAYMENT_PROVIDER_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/** What a text field says about itself. Any part may be absent. */
+export interface PaymentFieldFacts {
+  autocomplete?: string | undefined;
+  name?: string | undefined;
+  id?: string | undefined;
+  inputMode?: string | undefined;
+  /** Its accessible name or placeholder. */
+  label?: string | undefined;
+}
+
+/** The autocomplete tokens of a card: number, security code, expiry. */
+const CARD_AUTOCOMPLETE = /\bcc-(?:number|csc|exp(?:-month|-year)?)\b/i;
+/** A card or bank field by its name, id or label. */
+const PAYMENT_FIELD_WORDS =
+  /card ?(?:number|no\b)|\bcc ?num|\b(?:cvc|cvv|csc|cvc2|cvv2)\b|security code|card ?code|\bexpir(?:y|ation|es)\b|\bexp ?date\b|\bmm ?\/ ?yy\b|\biban\b|account ?number|routing ?number|sort ?code/i;
+
+/**
+ * Is this a field for card or bank details? `inputMode` alone decides nothing (a quantity is numeric
+ * too); it travels in the facts so a numeric field named "cvv" still reads as one.
+ */
+export function isPaymentField(facts: PaymentFieldFacts): boolean {
+  if (CARD_AUTOCOMPLETE.test(facts.autocomplete ?? '')) return true;
+  const words = [facts.name, facts.id, facts.label]
+    .map((w) => (w ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' '))
+    .join(' ');
+  return PAYMENT_FIELD_WORDS.test(words);
+}
+
+/**
+ * The outward action a control would take, from its text and role; value pickers take none.
+ *
+ * Paying is never read from a control's words, only from where it goes: a link or form in `text`
+ * that points at a payment provider. `PAY` stays in the journey vocabulary, so "she pays" allows it.
+ */
 export function outwardActionOf(text: string, role?: string): OutwardAction | undefined {
   if (role !== undefined && VALUE_PICKER_ROLES.has(role.trim().toLowerCase())) return undefined;
+  if (text.split(/\s+/).some(isPaymentProviderUrl)) return OutwardAction.PAY;
   const words = text.replace(/[_-]+/g, ' ');
-  return OUTWARD_WORDS.find(([, pattern]) => pattern.test(words))?.[0];
+  return OUTWARD_WORDS.find(
+    ([action, pattern]) => action !== OutwardAction.PAY && pattern.test(words),
+  )?.[0];
 }
 
 /** A word that turns the action after it into one the journey forbids: "does not send". */

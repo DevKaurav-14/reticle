@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ActionType } from '@reticlehq/core';
-import { assertNotDestructive, confirmedByDeclaration } from './act-danger.js';
+import {
+  assertNotDestructive,
+  assertNotPaymentNavigation,
+  confirmedByDeclaration,
+} from './act-danger.js';
 import { runDrivenBy } from '@/hooks/driven-by.js';
 
 describe('assertNotDestructive', () => {
@@ -60,5 +64,50 @@ describe('confirmedByDeclaration', () => {
       Promise.resolve(confirmedByDeclaration({}, PLACE_ORDER, true)),
     );
     expect(out).toEqual({});
+  });
+});
+
+/*
+ * The payment boundary for the Harness is typing card details or leaving for a payment provider.
+ * "Start free trial" was refused as "would need to pay" on 3 of 4 explores; a real checkout page is
+ * still out of bounds unless the person asked to pay.
+ */
+describe('the Harness and payment', () => {
+  const HARNESS = { harness: 'h1', driver: 'server' } as const;
+  const drive = (asked: string, fn: () => void): Promise<void> =>
+    runDrivenBy(HARNESS, () => new Promise<void>((resolve) => resolve(fn())), asked);
+
+  it('presses Start free trial with confirmDangerous unset', async () => {
+    await expect(
+      drive('Sign up and look at the dashboard', () =>
+        assertNotDestructive(ActionType.CLICK, {}, { text: 'Start free trial', role: 'button' }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('refuses a link to a payment provider, and a navigation to one', async () => {
+    await expect(
+      drive('Sign up and look at the dashboard', () =>
+        assertNotDestructive(
+          ActionType.CLICK,
+          { confirmDangerous: true },
+          { text: 'Continue', role: 'link', href: 'https://checkout.stripe.com/c/pay/x' },
+        ),
+      ),
+    ).rejects.toThrow(/would need to pay/);
+    await expect(
+      drive('Sign up and look at the dashboard', () =>
+        assertNotPaymentNavigation('https://test.checkout.dodopayments.com/buy/p_1'),
+      ),
+    ).rejects.toThrow(/would need to pay/);
+  });
+
+  it('goes to the provider when the journey asks to pay, and never gates an agent', async () => {
+    await expect(
+      drive('She pays for the Pro plan', () =>
+        assertNotPaymentNavigation('https://checkout.stripe.com/c/pay/x'),
+      ),
+    ).resolves.toBeUndefined();
+    expect(() => assertNotPaymentNavigation('https://checkout.stripe.com/c/pay/x')).not.toThrow();
   });
 });
