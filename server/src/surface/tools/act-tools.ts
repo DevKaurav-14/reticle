@@ -28,6 +28,7 @@ import {
   VerifiedReason,
   PredicateKind,
   type JournalVerdictEffect,
+  checkIntent,
 } from '@reticlehq/core';
 import { leanActResult, mutatedWithin } from './act/act-view.js';
 import { ReticleTool } from '@reticlehq/core';
@@ -893,6 +894,7 @@ export const ACT_TOOLS: ToolDef[] = [
         verdictEffect = {
           claim: describeWaitTarget(until),
           verified: decision.verified,
+          ...checkIntent(until, asRecord(verdict)['evidence'], asString(args['intent'])),
           ...(actedSourceLabel === undefined ? {} : { source: actedSourceLabel }),
           ...checkWords(verdict),
           // TRUE here, and false on the `assert` path, and the difference is the point. This tool

@@ -21,6 +21,7 @@ import {
   Verified,
   VerifiedReason,
   type JournalVerdictEffect,
+  checkIntent,
 } from '@reticlehq/core';
 import type { RecordedStep } from '@/language/flows/recording/tape/recordings.js';
 import { healthEnvelope } from '@/portal/session/session-health.js';
@@ -95,6 +96,8 @@ interface StepCheck {
   readonly observed?: string | undefined;
   /** The step result's `source`, as the browser reported it. */
   readonly source?: unknown;
+  /** What the evaluation kept: an allOf's per-part results name the part that failed. */
+  readonly evidence?: unknown;
 }
 
 /** The verdict effect for one step: the same rules act_and_wait applies to one action. */
@@ -110,6 +113,8 @@ function stepVerdictEffect(check: StepCheck): JournalVerdictEffect {
   return {
     claim: describeWaitTarget(check.expect),
     verified,
+    // A step's sentence: the step names no intent of its own, so it is built from its expect.
+    ...checkIntent(check.expect, check.evidence),
     ...(source === undefined ? {} : { source: `${source.file}:${String(source.line)}` }),
     ...(check.expected === undefined ? {} : { expected: check.expected }),
     ...(check.observed === undefined ? {} : { observed: check.observed }),
@@ -396,6 +401,7 @@ export const ACT_SEQUENCE_TOOL: ToolDef = {
                 expected: verdict.expected,
                 observed: held ? undefined : (verdict.observed ?? verdict.failureReason),
                 source: asRecord(outcome.result)['source'],
+                evidence: verdict.evidence,
               }),
             );
             expectations.push({

@@ -192,5 +192,18 @@ export const JournalVerdictEffectSchema = z.object({
    * be read as though it did.
    */
   reason: z.string().max(TRANSPORT_LIMITS.MAX_STRING_LENGTH).optional(),
+  /**
+   * What the check is for, as a person's sentence: the agent's `intent`, else one built from the
+   * predicate in the failure voice ("No PATCH request to /assignee was made"). Without it a check
+   * the agent gave no words for reached the platform as engine wording. Absent on older records.
+   */
+  intent: z.string().max(TRANSPORT_LIMITS.MAX_STRING_LENGTH).optional(),
+  /** True when `intent` was built from the predicate, not given by the agent. */
+  intentDerived: z.boolean().optional(),
+  /**
+   * The index of the part of an `allOf` that failed, so a title can name the one thing that did
+   * not happen rather than "not all of these happened". Absent on a pass, a leaf, and older records.
+   */
+  failedPart: z.number().int().min(0).optional(),
 });
 export type JournalVerdictEffect = z.infer<typeof JournalVerdictEffectSchema>;

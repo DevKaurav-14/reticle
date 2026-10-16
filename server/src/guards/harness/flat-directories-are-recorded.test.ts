@@ -112,8 +112,11 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
    * 18 with `disparity.ts` (the agent and Harness verdicts on one goal, compared) and
    * `instrumentation-coverage.ts` (how much of an app Reticle sees): verdict facts the HUD,
    * `doctor` and the platform all read.
+   *
+   * 19 with `check-sentence.ts`: a recorded check as a person's sentence. It sits beside the
+   * predicate it reads, and the platform can build the same sentence from the contract.
    */
-  'core/src/verdict': 18,
+  'core/src/verdict': 19,
   // 17 since `hold.ts`: `clampHoldMs` is the bound BOTH input paths clamp `holdMs` with, so it
   // belongs to the contract rather than to either caller. The reason it is a file of its own rather
   // than a line in `global-press.ts` is the one recorded below: `core/src/wire`'s filenames are

@@ -1,0 +1,141 @@
+/**
+ * A check in a person's words.
+ *
+ * A check the agent recorded without an `intent` reached the platform as its predicate alone, so its
+ * issue was titled with engine wording ("a request PATCH matching '/assignee'"). This builds the
+ * sentence a reader opens a failed check for, from the predicate itself: what did not happen, or
+ * what happened that should not have. The engine's `describeWaitTarget` stays the claim; this is
+ * its title. In core so the platform can build the same sentence for a check that has none.
+ */
+import type { ElementQuery } from '@/wire/types.js';
+import { PredicateKind } from './consequence.js';
+import type { Predicate } from './predicate.js';
+
+/** Joins the parts of a conjunction in one sentence. */
+const PART_GAP = '; ';
+const ALL_OF_LEAD = 'Not all of these happened: ';
+const ANY_OF_LEAD = 'None of these happened: ';
+const SHOULD_NOT = ', and it should not have';
+
+const capital = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** The element a query names, as a noun: 'the button "Pay"', 'the element marked "x"', 'a dialog'. */
+function elementNoun(query: ElementQuery): string {
+  if (query.testid !== undefined) return `the element marked "${query.testid}"`;
+  const named = query.name ?? query.text ?? query.label ?? query.placeholder ?? query.alt;
+  if (query.role !== undefined)
+    return named === undefined ? `a ${query.role}` : `the ${query.role} "${named}"`;
+  if (named !== undefined) return `the element "${named}"`;
+  return `an element matching ${JSON.stringify(query)}`;
+}
+
+/** What a claim is about, as a noun: "a PATCH request to /assignee", 'the text "Saved"'. */
+function noun(predicate: Predicate): string {
+  switch (predicate.kind) {
+    case PredicateKind.NET:
+      return `a ${predicate.method === undefined ? '' : `${predicate.method} `}request${
+        predicate.urlContains === undefined ? '' : ` to ${predicate.urlContains}`
+      }`;
+    case PredicateKind.TEXT:
+      return `the text "${predicate.contains ?? ''}"`;
+    case PredicateKind.SIGNAL:
+      return predicate.name === undefined ? 'a signal' : `the app reporting "${predicate.name}"`;
+    case PredicateKind.ROUTE:
+      return predicate.pathname !== undefined
+        ? `a move to ${predicate.pathname}`
+        : predicate.contains !== undefined
+          ? `a move to an address holding "${predicate.contains}"`
+          : 'a route change';
+    case PredicateKind.ELEMENT:
+      return elementNoun(predicate.query);
+    default:
+      return `a ${predicate.kind} check`;
+  }
+}
+
+/** The sentence for a leaf claim that did not come true. */
+function missed(predicate: Predicate): string {
+  switch (predicate.kind) {
+    case PredicateKind.NET:
+      return `No ${noun(predicate).slice('a '.length)} was made`;
+    case PredicateKind.TEXT:
+      return true === predicate.absent
+        ? `${capital(noun(predicate))} appeared${SHOULD_NOT}`
+        : `${capital(noun(predicate))} never appeared`;
+    case PredicateKind.SIGNAL:
+      return predicate.name === undefined
+        ? 'The app reported no signal'
+        : `The app never reported "${predicate.name}"`;
+    case PredicateKind.ROUTE:
+      return predicate.pathname !== undefined
+        ? `The page never moved to ${predicate.pathname}`
+        : predicate.contains !== undefined
+          ? `The address never came to hold "${predicate.contains}"`
+          : 'The route never changed';
+    case PredicateKind.ELEMENT: {
+      const subject = elementNoun(predicate.query);
+      if (true === predicate.absent) return `${capital(subject)} appeared${SHOULD_NOT}`;
+      if (predicate.state !== undefined) return `${capital(subject)} was not ${predicate.state}`;
+      return subject.startsWith('a ')
+        ? `No ${subject.slice('a '.length)} appeared`
+        : `${capital(subject)} never appeared`;
+    }
+    case PredicateKind.STATE:
+      return `The app's state at ${predicate.path} was not as the check expected`;
+    case PredicateKind.SETTLED:
+      return 'The page never went idle';
+    case PredicateKind.CONSOLE:
+      return true === predicate.absent
+        ? `A console message appeared${SHOULD_NOT}`
+        : 'No console message appeared';
+    case PredicateKind.ANIMATION:
+      return predicate.name === undefined
+        ? 'No animation ran'
+        : `The animation "${predicate.name}" never ran`;
+    case PredicateKind.COMPARE:
+      return `The ${predicate.left.from} and ${predicate.right.from} readings did not agree`;
+    case PredicateKind.NOT:
+      return `${capital(noun(predicate.predicate))} happened${SHOULD_NOT}`;
+    case PredicateKind.ALL_OF:
+      return `${ALL_OF_LEAD}${predicate.predicates.map(noun).join(PART_GAP)}`;
+    case PredicateKind.ANY_OF:
+      return `${ANY_OF_LEAD}${predicate.predicates.map(noun).join(PART_GAP)}`;
+  }
+}
+
+/**
+ * The check in the failure voice. With `failedPart`, an `allOf` is named by the one part that failed.
+ */
+export function failureSentence(predicate: Predicate, failedPart?: number): string {
+  if (PredicateKind.ALL_OF === predicate.kind && failedPart !== undefined) {
+    const part = predicate.predicates[failedPart];
+    if (part !== undefined) return failureSentence(part);
+  }
+  return missed(predicate);
+}
+
+/**
+ * The index of the `allOf` part that failed, read from the per-part results a failed conjunction
+ * keeps as its evidence. A part nobody could read is skipped: a real failure outranks it, as in the
+ * evaluation. Undefined for a pass, a leaf, an `anyOf` (every part failed) or evidence it cannot read.
+ */
+export function failedPartOf(predicate: Predicate, evidence: unknown): number | undefined {
+  if (PredicateKind.ALL_OF !== predicate.kind || !Array.isArray(evidence)) return undefined;
+  const index = evidence.findIndex((part: unknown) => {
+    if ('object' !== typeof part || null === part) return false;
+    return false === Reflect.get(part, 'pass') && undefined === Reflect.get(part, 'inconclusive');
+  });
+  return index < 0 ? undefined : index;
+}
+
+/** The intent fields a recorded check carries: the agent's words, else the sentence built here. */
+export function checkIntent(
+  predicate: Predicate,
+  evidence: unknown,
+  given?: string,
+): { intent: string; intentDerived?: true; failedPart?: number } {
+  const failedPart = failedPartOf(predicate, evidence);
+  const part = failedPart === undefined ? {} : { failedPart };
+  if (given !== undefined && 0 < given.trim().length) return { intent: given, ...part };
+  return { intent: failureSentence(predicate, failedPart), intentDerived: true, ...part };
+}

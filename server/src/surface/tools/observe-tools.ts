@@ -13,6 +13,7 @@ import {
   DEFAULT_ASSERT_TIMEOUT_MS,
   PredicateKind,
   Verified,
+  checkIntent,
 } from '@reticlehq/core';
 import { ReticleTool } from '@reticlehq/core';
 import {
@@ -643,6 +644,8 @@ export const OBSERVE_TOOLS: ToolDef[] = [
       session.recordAction(ReticleTool.ASSERT, asRecord(args), {
         ...verdictEffect,
         ...checkWords(verdict),
+        // A person's sentence for the check, and the part of an allOf that failed.
+        ...checkIntent(predicate, verdict.evidence, asString(args['intent'])),
       });
       // A passing check over the default window (since the last act) is proof of that act, so it
       // joins that step in the recording — otherwise "act, then assert" saves a bare click. An
