@@ -139,3 +139,64 @@ export function checkIntent(
   if (given !== undefined && 0 < given.trim().length) return { intent: given, ...part };
   return { intent: failureSentence(predicate, failedPart), intentDerived: true, ...part };
 }
+
+const lower = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1);
+
+/** What a claim makes true, as a sentence: "A POST request to /api/login is made". */
+export function expectSentence(predicate: Predicate): string {
+  switch (predicate.kind) {
+    case PredicateKind.NET:
+      return `${capital(noun(predicate))} is made`;
+    case PredicateKind.TEXT:
+      return `${capital(noun(predicate))} ${true === predicate.absent ? 'does not appear' : 'appears'}`;
+    case PredicateKind.SIGNAL:
+      return predicate.name === undefined
+        ? 'The app reports a signal'
+        : `The app reports "${predicate.name}"`;
+    case PredicateKind.ROUTE:
+      return predicate.pathname !== undefined
+        ? `The page moves to ${predicate.pathname}`
+        : predicate.contains !== undefined
+          ? `The address holds "${predicate.contains}"`
+          : 'The route changes';
+    case PredicateKind.ELEMENT: {
+      const subject = capital(elementNoun(predicate.query));
+      if (true === predicate.absent) return `${subject} does not appear`;
+      return predicate.state === undefined
+        ? `${subject} appears`
+        : `${subject} is ${predicate.state}`;
+    }
+    case PredicateKind.STATE:
+      return `The app's state at ${predicate.path} holds the expected value`;
+    case PredicateKind.SETTLED:
+      return 'The page goes idle';
+    case PredicateKind.NOT:
+      return `${capital(noun(predicate.predicate))} does not happen`;
+    case PredicateKind.ALL_OF:
+      return joined(predicate.predicates, ' and ');
+    case PredicateKind.ANY_OF:
+      return joined(predicate.predicates, ' or ');
+    default:
+      return `${capital(noun(predicate))} holds`;
+  }
+}
+
+function joined(predicates: readonly Predicate[], gap: string): string {
+  return predicates
+    .map((p, i) => (0 === i ? expectSentence(p) : lower(expectSentence(p))))
+    .join(gap);
+}
+
+/** How many claims a journey's sentence names before it stops: a name, not a transcript. */
+const JOURNEY_CLAIMS = 2;
+
+/**
+ * A journey in one sentence, from what its steps expect, in order: "A POST request to /api/login is
+ * made, then the page moves to /home". An expect that only waits for the page to go idle says
+ * nothing about the journey and is skipped. Undefined when no step claims anything else.
+ */
+export function journeySentence(expects: readonly Predicate[]): string | undefined {
+  const claims = expects.filter((p) => PredicateKind.SETTLED !== p.kind).slice(0, JOURNEY_CLAIMS);
+  if (0 === claims.length) return undefined;
+  return joined(claims, ', then ');
+}

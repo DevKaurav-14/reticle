@@ -145,7 +145,7 @@ describe('a session that visited several routes becomes several flows', () => {
  * and it says nothing whatever about what the flow proves. Both are obtainable: lead with what was
  * PROVED, keep a short session discriminator so two journeys cannot collide.
  */
-describe('a drive flow is named after what it proved', () => {
+describe('a drive flow is named after what it proved, in words', () => {
   const proving = (expect_: Predicate, route?: string): TapeStep => ({
     tool: ReticleTool.ACT,
     args: { ref: 'e1', action: 'click' },
@@ -154,20 +154,35 @@ describe('a drive flow is named after what it proved', () => {
     ...(route === undefined ? {} : { route }),
   });
 
-  it('leads with the signal, which is the strongest thing a flow can claim', () => {
+  // Named by request path and a hash ("drive-get-v1-runs-issues-c69f82"), the file said nothing.
+  it('names the file from a sentence built from what the steps expect', () => {
     const name = driveFlowName(undefined, [proving({ kind: 'signal', name: 'auth:granted' })]);
-    expect(name).toBe('drive-auth-granted');
-  });
-
-  it('falls to the request, then the store path, when there is no signal', () => {
+    expect(name).toBe('drive-the-app-reports-auth-granted');
     expect(
       driveFlowName(undefined, [
         proving({ kind: 'net', method: 'POST', urlContains: '/api/login' }),
       ]),
-    ).toContain('post-api-login');
-    expect(driveFlowName(undefined, [proving({ kind: 'state', path: 'auth.email' })])).toContain(
-      'auth-email',
+    ).toBe('drive-a-post-request-to-api-login-is-made');
+  });
+
+  it('writes the sentence on the saved flow, marked as built rather than declared', () => {
+    const { programs } = driveFlowsFrom({
+      steps: [
+        proving({ kind: 'net', method: 'POST', urlContains: '/api/login' }),
+        proving({ kind: 'route', pathname: '/home' }),
+      ],
+    });
+    expect(programs[0]?.intent).toBe(
+      'A POST request to /api/login is made, then the page moves to /home',
     );
+    expect(programs[0]?.intentDerived).toBe(true);
+  });
+
+  it('keeps the name bounded', () => {
+    const long = 'x'.repeat(200);
+    expect(
+      driveFlowName(undefined, [proving({ kind: 'text', contains: long })]).length,
+    ).toBeLessThan(80);
   });
 
   it('still carries the route, so two journeys in one session stay apart', () => {
@@ -221,6 +236,7 @@ describe('a drive flow is named after why it was driven', () => {
     const { programs } = driveFlowsFrom({ steps: [intended('Close an issue')] });
     expect(programs[0]?.steps[0]?.intent).toBe('Close an issue');
     expect(programs[0]?.name).toBe('drive-close-an-issue');
+    expect(programs[0]?.intent).toBeUndefined();
   });
 });
 

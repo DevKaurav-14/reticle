@@ -450,6 +450,10 @@ export class FlowStore {
       ...annotated,
       // The action's own intent, when nobody annotated the flow — see RecordedStep.intent.
       ...(annotated.intent === undefined && intent !== undefined ? { intent } : {}),
+      // Else the sentence an auto-saved drive built from its expects, marked as built.
+      ...(annotated.intent === undefined && intent === undefined && program.intent !== undefined
+        ? { intent: program.intent, ...(program.intentDerived ? { intentDerived: true } : {}) }
+        : {}),
       ...routeClaims(annotated.startPath, annotated.steps),
       ...(program.author === undefined ? {} : { author: program.author }),
     };

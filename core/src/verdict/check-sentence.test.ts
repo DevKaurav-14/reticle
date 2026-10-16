@@ -7,7 +7,13 @@
 import { describe, expect, it } from 'vitest';
 import { PredicateKind } from './consequence.js';
 import type { Predicate } from './predicate.js';
-import { checkIntent, failedPartOf, failureSentence } from './check-sentence.js';
+import {
+  checkIntent,
+  expectSentence,
+  failedPartOf,
+  failureSentence,
+  journeySentence,
+} from './check-sentence.js';
 
 const net = (method: string, urlContains: string): Predicate => ({
   kind: PredicateKind.NET,
@@ -107,5 +113,34 @@ describe('the intent a recorded check carries', () => {
       intentDerived: true,
       failedPart: 1,
     });
+  });
+});
+
+/*
+ * An auto-saved drive with no declared intent was named by its request path and a hash
+ * ("drive-get-v1-runs-issues-c69f82"), and its file said nothing about what it was for.
+ */
+describe('a journey in one sentence, from what its steps expect', () => {
+  it('says what each claim makes true', () => {
+    expect(expectSentence(net('POST', '/api/login'))).toBe('A POST request to /api/login is made');
+    expect(expectSentence(text('Saved'))).toBe('The text "Saved" appears');
+    expect(expectSentence({ kind: PredicateKind.ROUTE, pathname: '/home' })).toBe(
+      'The page moves to /home',
+    );
+    expect(expectSentence({ kind: PredicateKind.NOT, predicate: net('DELETE', '/x') })).toBe(
+      'A DELETE request to /x does not happen',
+    );
+  });
+
+  it('joins the first two claims in order and skips a bare wait for idle', () => {
+    expect(
+      journeySentence([
+        { kind: PredicateKind.SETTLED },
+        net('POST', '/api/login'),
+        { kind: PredicateKind.ROUTE, pathname: '/home' },
+        text('Welcome'),
+      ]),
+    ).toBe('A POST request to /api/login is made, then the page moves to /home');
+    expect(journeySentence([{ kind: PredicateKind.SETTLED }])).toBeUndefined();
   });
 });

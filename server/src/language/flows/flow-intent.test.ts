@@ -205,3 +205,27 @@ describe('a blank intent is not an intent', () => {
     expect(flowIntentGap(flowWith({ intentId: 'inline:checkout-abc' }))).toBeUndefined();
   });
 });
+
+/*
+ * An auto-saved drive with no declared intent now carries a sentence built from its expects. It
+ * describes the steps, so it must never enter the ledger as a goal the same steps then prove.
+ */
+describe('a built sentence is a name, never a declared goal', () => {
+  it('writes it on the flow, keeps it out of the ledger, and still asks for an intent', async () => {
+    const { flows, intents } = harness();
+    const built = 'The text "Checked in" appears';
+    await flows.saveJourney(
+      { ...program('drive-checkin'), intent: built, intentDerived: true },
+      undefined,
+      'drive-',
+    );
+    const loaded = await flows.load('drive-checkin');
+    expect(loaded.ok && loaded.value.intent).toBe(built);
+    expect(loaded.ok && loaded.value.intentDerived).toBe(true);
+    expect(loaded.ok && loaded.value.intentId).toBeUndefined();
+    expect(await intents.read()).toEqual([]);
+    expect(loaded.ok && flowIntentGap(loaded.value)?.kind).toBe(
+      InstrumentationGapKind.NO_FLOW_INTENT,
+    );
+  });
+});

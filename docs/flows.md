@@ -106,6 +106,7 @@ There is no state to restore, so the steps before `from` run again quickly as se
 Every session's driving is saved as a flow at teardown when it declared a consequence. These flows:
 
 - are named from the `intent` you pass to `reticle_act_and_wait` (`drive-close-an-issue`), and carry it as the flow's `intent`;
+- without an `intent`, carry a sentence built from what the steps expect, in order ("A POST request to /api/login is made, then the page moves to /home"), as `intent` with `intentDerived: true`, and are named from it (`drive-a-post-request-to-api-login-is-made-login`). A built sentence never enters the intent ledger, and the flow still reports that it declares no intent. Flows saved before this keep their names;
 - merge: another drive that starts on the same page and takes the same steps updates the existing file instead of adding a copy. The existing flow keeps its name and everything it already says; the new drive only fills gaps. Flows you named yourself are never merged;
 - record, on every step, the `page` it ran on and the `endPage` it led to;
 - declare `requires` (the start page) and `ensures` (the end page) as route claims, so `canFollow` can tell which flows chain. Replay treats a required start page as met by navigating there;

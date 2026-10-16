@@ -18,7 +18,9 @@ import { classifyFlowAssertions } from './flow-classify.js';
  *
  * Nothing here derives an intent from step names. A flow that declares none reports that it declares
  * none — a guessed intent puts words in the product owner's mouth and an agent will act on them,
- * which is strictly worse than the honest absence.
+ * which is strictly worse than the honest absence. An auto-saved drive does carry a sentence built
+ * from its expects (`intentDerived`), so a reader can tell what it checks; it never enters the
+ * ledger, and the flow still reports that it declares no intent.
  */
 
 /** Namespaced so a flow-declared intent never collides with one an agent declared by hand. */
@@ -44,6 +46,8 @@ export function flowReplayVerdictId(flowName: string, at: number): string {
  */
 function intentIdOf(flow: FlowFile): string | undefined {
   if (flow.intentId !== undefined) return flow.intentId;
+  // A sentence built from the steps names the flow; it is not a goal, so it declares nothing.
+  if (true === flow.intentDerived) return undefined;
   // TRIMMED, not merely defined. `intent: "   "` satisfied `!== undefined` and silenced the gap, so
   // a flow whose stated goal is whitespace looked identical on disk to one somebody thought about.
   //

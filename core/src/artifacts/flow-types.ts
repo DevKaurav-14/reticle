@@ -264,6 +264,13 @@ export const FlowFileSchema = z.object({
    */
   intent: z.string().optional(),
   /**
+   * True when `intent` was built from the steps' expects, not declared by anybody. An auto-saved
+   * drive with no declared intent was named by its request path and read as nothing. A built
+   * sentence names it, and this flag keeps it out of the intent ledger: it describes the steps, so
+   * it can never be a goal the steps then prove.
+   */
+  intentDerived: z.boolean().optional(),
+  /**
    * The intent-ledger row this flow discharges — the id in `.reticle/intent.json`.
    *
    * `intent` above is the prose a recorder captured; this is the LINK to the ledger that already
