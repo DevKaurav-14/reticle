@@ -53,6 +53,7 @@ import { machineUnsyncedRoots } from '@/memory/project/sync-status.js';
 import { describeSync, runSyncCycle } from '@/memory/cloud/sync-cycle.js';
 import { diskSink, diskSource, readCloudIssues, readCloudState } from '@/memory/cloud/sync-disk.js';
 import { fetchPlatformRun } from '@/features/harness/platform/platform-drives.js';
+import { SERVER_VERSION } from '@/command/version/identity/server-version.js';
 
 /**
  * Where `reticle login` dials when nothing says otherwise: the hosted service.
@@ -385,6 +386,7 @@ const cmdSync = async (argv: readonly string[]): Promise<number> => {
       sink: diskSink(reticleRoot),
       state: readCloudState(reticleRoot),
       now: () => Date.now(),
+      clientVersion: SERVER_VERSION,
       request: (url, init) => syncRequest(url, init),
     });
     emit({

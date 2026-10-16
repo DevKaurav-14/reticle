@@ -487,6 +487,7 @@ export async function startDaemon(options: StartOptions = {}): Promise<RunningSe
     homeDir: homedir(),
     env: process.env,
     otherRoots: knownProjectRoots,
+    clientVersion: SERVER_VERSION,
   });
   syncNudge.run = (): void => cloudSync.nudge();
   // `syncNow`, not `nudge` (a cycle soon): somebody is watching the button. Never awaited.

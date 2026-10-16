@@ -166,17 +166,42 @@ export interface CloudSyncState extends ScreenshotSyncState {
 
 type SetPart = 'flow' | 'capsule';
 
-interface RefusedSet {
+interface RefusedSet extends RefusalStamp {
   hash: string;
-  acceptsHash: string;
   count: number;
   reason: string;
 }
 
-interface RefusedRun {
+/**
+ * What could change a refusal's answer besides the item itself. A refusal used to stand until the
+ * item changed or the platform's `accepts` did, so a refused flow set stayed refused after the
+ * platform relaxed its rule, until somebody deleted the entry by hand. The platform sends no version
+ * of its own, so the CLI's version stands in for "the conversation changed", and age bounds the rest.
+ */
+interface RefusalStamp {
+  acceptsHash: string;
+  /** The CLI version that heard the refusal. Absent on a refusal recorded before this existed. */
+  version?: string;
+  /** When it was heard. Absent on a refusal recorded before this existed. */
+  at?: number;
+}
+
+/** A refusal older than this is offered again, whatever else is unchanged. */
+export const REFUSAL_RETRY_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Does an earlier refusal still hold? An entry from before the stamp existed is asked once more. */
+function refusalHolds(prior: RefusalStamp, now: RefusalStamp & { at: number }): boolean {
+  return (
+    prior.acceptsHash === now.acceptsHash &&
+    prior.version === now.version &&
+    'number' === typeof prior.at &&
+    now.at - prior.at < REFUSAL_RETRY_AFTER_MS
+  );
+}
+
+interface RefusedRun extends RefusalStamp {
   reason: string;
   payloadHash: string;
-  acceptsHash: string;
 }
 
 export interface SyncReport {
@@ -247,6 +272,8 @@ interface SyncDeps {
   sink: SyncSink;
   state: CloudSyncState;
   now: () => number;
+  /** This CLI's version, stamped on each refusal: a new one asks the platform again. */
+  clientVersion?: string;
   /** Injected so a cycle can be driven against a scripted server with no network. */
   request: (
     url: string,
@@ -472,6 +499,11 @@ export async function runSyncCycle(given: SyncDeps): Promise<SyncReport> {
     // 2. SEND — only what the server does not already have, and only what it can read.
     const allRuns = deps.source.runs();
     const acceptsHash = hashPayload(held.accepts ?? null);
+    const stamp = {
+      acceptsHash,
+      ...(deps.clientVersion === undefined ? {} : { version: deps.clientVersion }),
+      at: deps.now(),
+    };
     const priorRefusals = isRecord(deps.state.refusedRuns) ? deps.state.refusedRuns : {};
     const refusedRuns: Record<string, RefusedRun> = {};
     const notRetried: Array<{ runId: string; reason: string }> = [];
@@ -494,7 +526,7 @@ export async function runSyncCycle(given: SyncDeps): Promise<SyncReport> {
       const unchanged =
         prior !== undefined &&
         'string' === typeof prior.reason &&
-        prior.acceptsHash === acceptsHash &&
+        refusalHolds(prior, stamp) &&
         prior.payloadHash === hashPayload(run.payload);
       if (!unchanged) return true;
       refusedRuns[run.runId] = prior;
@@ -596,7 +628,7 @@ export async function runSyncCycle(given: SyncDeps): Promise<SyncReport> {
       if (0 === size) return false;
       const prior = priorSets[part];
       if (prior !== undefined && prior.hash === hash) {
-        if (prior.acceptsHash !== acceptsHash) return true;
+        if (!refusalHolds(prior, stamp)) return true;
         refusedSets[part] = prior;
         setsNotRetried.push({ part, count: prior.count, reason: prior.reason });
         return false;
@@ -660,8 +692,7 @@ export async function runSyncCycle(given: SyncDeps): Promise<SyncReport> {
         if (reason === undefined) {
           known.add(run.runId);
           recorded[run.runId] = hashPayload(run.payload);
-        } else
-          refusedRuns[run.runId] = { reason, payloadHash: hashPayload(run.payload), acceptsHash };
+        } else refusedRuns[run.runId] = { reason, payloadHash: hashPayload(run.payload), ...stamp };
       });
       runsRejected.push(
         ...runs.rejected.map((r) => ({ index: r.index + offset, reason: r.reason })),
@@ -691,14 +722,14 @@ export async function runSyncCycle(given: SyncDeps): Promise<SyncReport> {
       if (flowsPart.rejected.length > 0)
         refusedSets.flow = {
           hash: flowsHash,
-          acceptsHash,
+          ...stamp,
           count: flowsPart.rejected.length,
           reason: firstOf('flow'),
         };
       if (capsulesPart.rejected.length > 0)
         refusedSets.capsule = {
           hash: capsulesHash,
-          acceptsHash,
+          ...stamp,
           count: capsulesPart.rejected.length,
           reason: firstOf('capsule'),
         };

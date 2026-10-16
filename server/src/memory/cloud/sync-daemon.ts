@@ -107,6 +107,8 @@ interface SyncDaemonDeps {
   /** Resolve the link for a root that is not this daemon's own. Required to use `otherRoots`. */
   cloudFor?: (root: string) => Promise<ProjectCloud>;
   now?: () => number;
+  /** This CLI's version, stamped on each refusal so a new one asks the platform again. */
+  clientVersion?: string;
   intervalMs?: number;
   /**
    * Call `onChange` when this root's link file changes; returns how to stop. A re-link was read only
@@ -260,6 +262,7 @@ export function startSyncDaemon(deps: SyncDaemonDeps): SyncDaemon {
       sink: diskSink(root),
       state: readCloudState(root),
       now,
+      ...(deps.clientVersion === undefined ? {} : { clientVersion: deps.clientVersion }),
       request,
     });
   };
@@ -496,9 +499,11 @@ export function attachCloudSync(deps: {
   homeDir: string;
   env: NodeJS.ProcessEnv;
   otherRoots: () => readonly string[];
+  clientVersion: string;
 }): SyncDaemon {
   return startSyncDaemon({
     reticleRoot: deps.reticleRoot,
+    clientVersion: deps.clientVersion,
     cloud: () => resolveProjectCloud(deps.fs, deps.reticleRoot, deps.homeDir, deps.env),
     // Every OTHER linked repo on this machine, not just the directory the daemon was started in.
     // One daemon serves many projects, and pushing only its own root left the rest silently
