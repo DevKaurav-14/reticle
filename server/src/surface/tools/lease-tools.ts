@@ -10,6 +10,7 @@
  * Attach-only: the pool drives a browser against an already-running dev server — it never starts one.
  */
 
+import * as production from '@/portal/production/production-activation.js';
 import type { RealInputProvider } from '@/portal/input/real-input.js';
 import {
   fixturePortFor,
@@ -427,6 +428,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       .optional()
       .describe('How the HUD starts on the page: shown (default), hidden, or removed.'),
     permissions: LEASE_PERMISSIONS_ARG,
+    production: production.PRODUCTION_LEASE_ARG,
     root: z
       .string()
       .optional()
@@ -484,6 +486,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
         'True when this acquire returned an existing live lease on the same origin rather than minting a second context.',
       ),
     hint: z.string().optional(),
+    production: production.PRODUCTION_LEASE_OUTPUT,
     versionSkew: z
       .string()
       .optional()
@@ -534,6 +537,11 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       }
       validatedSeed = parsed.data;
     }
+    // Awaited only when asked: an extra tick here reorders concurrent acquires on the origin lock.
+    const activated =
+      args['production'] === undefined
+        ? undefined
+        : await production.activationFor(deps, args['production'], url, root);
     // Sampled BEFORE acquiring: afterwards this lease is itself a session, and the point is to name
     // a tab that already existed. A human's open tab is the one they can watch, so if one is here
     // the agent should be told at the moment it is choosing — not after it has gone dark on them.
@@ -580,7 +588,10 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
         existing !== undefined &&
         'boolean' === typeof certAsked &&
         pool.ignoresHTTPSErrors(existing) !== certAsked;
-      if ((validatedSeed !== undefined || certMismatch) && existing !== undefined) {
+      if (
+        (validatedSeed !== undefined || certMismatch || activated !== undefined) &&
+        existing !== undefined
+      ) {
         // Seeding or a different certificate setting asked for: release its own context so the new
         // lease starts with what was asked.
         await pool.release(existing);
@@ -638,7 +649,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       const sessionId = newLeaseId();
       // Before the page can dial in: the session is stamped with its root the moment it registers.
       if (root !== undefined) claimArtifactRoot(sessionId, root);
-      const navUrl = appendReticleParams(url, sessionId, projectId, hud);
+      const navUrl = appendReticleParams(activated?.url ?? url, sessionId, projectId, hud);
       let lease;
       try {
         lease = await pool.acquire(navUrl, {
@@ -669,7 +680,8 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       // and the id we hand back has to be the one the agent can actually drive.
       let registeredId: string | undefined;
       const waitStartedAt = Date.now();
-      const { ready, zeroInstall, stillLoading } = await connectOrInject(lease, () => {
+      const waited = await production.guardedForProduction(pool, lease, activated);
+      const { ready, zeroInstall, stillLoading } = await connectOrInject(waited, () => {
         registeredId = resolveLeasedSessionId(deps.sessions, lease.sessionId);
         return registeredId !== undefined;
       });
@@ -724,6 +736,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
               },
             }),
         ...(versionSkew === undefined ? {} : { versionSkew }),
+        ...production.summary(activated),
         ...(initScript === undefined ? {} : { hostStub: HOST_STUB_NOTE }),
         ...hintOf(
           ready
