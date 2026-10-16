@@ -172,6 +172,7 @@ async function handleInit(parsed: {
   flow?: string | undefined;
   env?: string[] | undefined;
   filesOnly?: boolean | undefined;
+  newId?: boolean | undefined;
   captureBodies?: boolean | undefined;
   hooks?: boolean | undefined;
   licenseKey?: string | undefined;
@@ -227,6 +228,7 @@ async function handleInit(parsed: {
       ...(parsed.url === undefined ? {} : { url: parsed.url }),
       captureBodies: true === parsed.captureBodies,
       hooks: true === parsed.hooks,
+      newId: true === parsed.newId,
       // The outcome is reported by confirmInstall instead, once it knows whether an app connected —
       // `init` writing files was never the same thing as `init` working (#269).
       deferOutcome: true,

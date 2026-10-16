@@ -679,11 +679,13 @@ const AGENT_ROOT_CONFIG_TITLE = 'Reticle config (agent root)';
  * project identity.
  */
 
-function agentRootConfigStep(input: PlanInput, content: string): Step[] {
+function agentRootConfigStep(input: PlanInput, content: string, renamedFrom?: string): Step[] {
   const root = input.agentFileRoot;
   if (root === undefined || 0 === root.length) return [];
   const path = agentFile(input, RETICLE_CONFIG_FILE);
-  const existingProject = projectIdOf(input.agentRootConfigSource);
+  const declared = projectIdOf(input.agentRootConfigSource);
+  // The root's copy of the id `--new-id` just replaced is this checkout's, not another app's.
+  const existingProject = declared === renamedFrom ? undefined : declared;
   const wantedProject = projectIdOf(content);
   /**
    * A monorepo has more than one app and the root can only point at one of them.
@@ -758,6 +760,7 @@ function reticleConfigStep(
   content: string,
   onDisk: string | null | undefined,
   movedFrom?: number,
+  renamedFrom?: string,
 ): Step {
   if (true === input.reticleConfigExists) {
     const problem = existingConfigProblem(onDisk);
@@ -774,16 +777,18 @@ function reticleConfigStep(
     // The one thing a re-run can still learn: which channel the user actually arrived through.
     // See configWithInstallSource — it only ever ADDS a field that is absent.
     const backfilled = configWithInstallSource(onDisk, input.installSource);
-    if (backfilled !== undefined || movedFrom !== undefined) {
+    if (backfilled !== undefined || movedFrom !== undefined || renamedFrom !== undefined) {
       const port = input.options.port;
       return {
         title: RETICLE_CONFIG_TITLE,
         target: RETICLE_CONFIG_FILE,
         status: StepStatus.APPLY,
         detail:
-          movedFrom !== undefined && port !== undefined
-            ? portMoveDetail(movedFrom, port)
-            : 'record which install route this project came through',
+          renamedFrom !== undefined
+            ? `this checkout's own project id: ${String(input.options.projectId)} (was ${renamedFrom}, the id it was copied with)`
+            : movedFrom !== undefined && port !== undefined
+              ? portMoveDetail(movedFrom, port)
+              : 'record which install route this project came through',
         write: { path: RETICLE_CONFIG_FILE, content: backfilled ?? onDisk ?? content },
       };
     }
@@ -812,12 +817,30 @@ function reticleConfigStep(
  * requested port, and a config still naming the old one is half of a split brain (see
  * port-steps.ts). Only the port moves; the identity stays the one already on disk.
  */
+/**
+ * `--new-id`: the config with `projectId` replaced by the one derived for THIS checkout, or null when
+ * there is nothing to replace. A copied repository keeps the original's `.reticle.json`, and init
+ * otherwise keeps a config on disk as it is, so nothing else gives the copy an id of its own.
+ */
+function withOwnProjectId(
+  source: string,
+  options: PlanInput['options'],
+): { code: string; from: string } | null {
+  const id = options.projectId;
+  const from = projectIdOf(source);
+  if (true !== options.newId || id === undefined || from === undefined || from === id) return null;
+  const fields = JSON.parse(source) as Record<string, unknown>;
+  return { code: `${JSON.stringify({ ...fields, projectId: id }, null, 2)}\n`, from };
+}
+
 function reticleConfigSteps(input: PlanInput): Step[] {
   const existing = input.reticleConfigSource;
-  const onDisk =
+  const copied =
     true === input.reticleConfigExists && null !== existing && existing !== undefined
       ? existing
       : undefined;
+  const renamed = copied === undefined ? null : withOwnProjectId(copied, input.options);
+  const onDisk = renamed?.code ?? copied;
   const moved = onDisk === undefined ? null : retargetConfigPort(onDisk, input.options.port);
   const content =
     moved?.code ??
@@ -831,8 +854,8 @@ function reticleConfigSteps(input: PlanInput): Step[] {
       input.installSource,
     );
   return [
-    reticleConfigStep(input, content, moved?.code ?? existing, moved?.from),
-    ...agentRootConfigStep(input, content),
+    reticleConfigStep(input, content, moved?.code ?? onDisk, moved?.from, renamed?.from),
+    ...agentRootConfigStep(input, content, renamed?.from),
   ];
 }
 

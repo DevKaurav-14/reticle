@@ -333,6 +333,8 @@ export interface PlanInput {
     install: boolean;
     /** Stable project identity derived at init (package.json name + root). Baked into snippets/.reticle.json. */
     projectId?: string;
+    /** `--new-id`: the config on disk takes `projectId` above in place of the id it was copied with. */
+    newId?: boolean;
     /** The CLI's own version, pinned onto the SDK install so a stale registry cache cannot skew it. */
     sdkVersion?: string;
   };

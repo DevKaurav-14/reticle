@@ -10,7 +10,7 @@ icon: wand-magic-sparkles
 npx @reticlehq/server init [--env KEY=VALUE]... [--app <dir>] [--license <key>] [--json]
                            [--files-only] [--relaunch] [--no-open] [--no-agents] [--url <app url>]
                            [--timeout S] [--dry-run] [--hooks] [--port N] [--no-mcp] [--no-install]
-                           [--start] [--capture-bodies] [--no-first-run]
+                           [--start] [--capture-bodies] [--no-first-run] [--new-id]
 ```
 
 ## Flags
@@ -21,6 +21,7 @@ npx @reticlehq/server init [--env KEY=VALUE]... [--app <dir>] [--license <key>] 
 | `--port N` | number | unset (resolves to `4400`) | Bridge port to write into the config |
 | `--no-mcp` | boolean | `false` (MCP is registered) | Skip the MCP registration **and** the agent rule files (`CLAUDE.md`, `AGENTS.md`, `.cursor`) and the `/reticle` command |
 | `--no-install` | boolean | `false` (deps are installed) | Do not run the install. The step becomes `[–]` ("skipped (--no-install); install them yourself: …") with the install command for you to run by hand, rather than vanishing from the plan |
+| `--new-id` | boolean | `false` | Give this checkout a project id of its own. A copied repository keeps the original's `.reticle.json`, and Reticle refuses a session from a second checkout of one id as ambiguous. This replaces `projectId` in this checkout's `.reticle.json` (and in the agent-root copy that names the same id) with the id derived for this folder, and keeps every other field. Nothing in the original checkout changes |
 | `--app <dir>` | string | unset | Pick which app to wire in a monorepo, without changing directory. On its own it implies `--files-only` |
 | `--start` | boolean | `false` | With `--app`, also boot the app the way a plain `init` does |
 | `--capture-bodies` | boolean | `false` | Write `captureNetworkBodies: true` into the Vite plugin call, so request and response bodies are captured |

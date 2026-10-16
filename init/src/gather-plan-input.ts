@@ -461,6 +461,7 @@ export function gatherPlanInput(options: InitOptions, io: InitIo, pkg: unknown):
       mcp: options.mcp,
       install: options.install,
       projectId,
+      ...(true === options.newId ? { newId: true } : {}),
       // The SDK must match the CLI asking for it — see pinnedPackages.
       sdkVersion: RETICLE_VERSION,
     },

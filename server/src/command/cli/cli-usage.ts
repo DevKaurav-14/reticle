@@ -42,6 +42,7 @@ the first flow. It never drives: the Harness is opt-in and unlocks at 80% instru
   --env KEY=VALUE    what the app needs to reach a usable state (repeatable)
   --files-only       write the files and stop; do not boot the app
   --no-install       do not install packages
+  --new-id           give this checkout its own project id (a copied repo keeps the original's)
   --no-mcp           skip the MCP registration, the agent rule files and the /reticle command
   --hooks            also install the agent hooks
   --relaunch         print the command that restarts this agent conversation with the tools loaded

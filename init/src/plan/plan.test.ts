@@ -70,6 +70,8 @@ function input(partial: Partial<PlanInput>): PlanInput {
     ...(partial.craEntry === undefined ? {} : { craEntry: partial.craEntry }),
     ...(partial.craEnv === undefined ? {} : { craEnv: partial.craEnv }),
     ...(partial.pairingToken === undefined ? {} : { pairingToken: partial.pairingToken }),
+    ...(partial.agentFileRoot === undefined ? {} : { agentFileRoot: partial.agentFileRoot }),
+    agentRootConfigSource: partial.agentRootConfigSource,
     options: partial.options ?? { port: undefined, mcp: true, install: false },
   };
 }
@@ -350,6 +352,65 @@ describe('an existing config is read, not assumed correct', () => {
     expect(step(plan, CONFIG_STEP).status).toBe(StepStatus.APPLY);
   });
 });
+
+/*
+ * A copied repository keeps the original's `.reticle.json`, and with it the original's project id.
+ * Re-running init kept the id on disk, so nothing gave the copy an id of its own and every session it
+ * served was refused as ambiguous. `--new-id` rewrites the id, and only the id, in this checkout.
+ */
+describe('init --new-id gives this checkout its own project id', () => {
+  const COPIED = '{\n  "framework": "vite",\n  "projectId": "shop-aaaaaaaa",\n  "port": 4401\n}\n';
+  const NEW_ID = 'shop-bbbbbbbb';
+
+  it('rewrites the project id and keeps every other field', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID, newId: true },
+      }),
+    );
+    const config = step(plan, CONFIG_STEP);
+    expect(config.status).toBe(StepStatus.APPLY);
+    expect(config.detail).toContain('shop-aaaaaaaa');
+    expect(config.detail).toContain(NEW_ID);
+    expect(JSON.parse(config.write?.content ?? '{}')).toEqual({
+      framework: 'vite',
+      projectId: NEW_ID,
+      port: 4401,
+    });
+  });
+
+  it('rewrites the copy at the agent root that names the old id', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        agentFileRoot: '/code/shop-copy',
+        agentRootConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID, newId: true },
+      }),
+    );
+    const root = step(plan, 'Reticle config (agent root)');
+    expect(root.status).toBe(StepStatus.APPLY);
+    expect(projectIdIn(root.write?.content)).toBe(NEW_ID);
+  });
+
+  it('keeps the id on disk without the flag', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID },
+      }),
+    );
+    expect(step(plan, CONFIG_STEP).status).toBe(StepStatus.ALREADY);
+  });
+});
+
+function projectIdIn(content: string | undefined): unknown {
+  return (JSON.parse(content ?? '{}') as Record<string, unknown>)['projectId'];
+}
 
 describe('buildPlan — Vite', () => {
   it('patches the vite config; no separate entry-file step (plugin injects connect)', () => {
