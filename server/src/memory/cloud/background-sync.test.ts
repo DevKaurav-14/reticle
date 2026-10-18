@@ -25,7 +25,7 @@ vi.mock('@/log.js', () => ({ log: vi.fn() }));
 const URL_LINKED = 'http://localhost:8890';
 const LINKED: ProjectCloud = {
   config: { url: URL_LINKED, apiKey: 'rk_test' },
-  policy: { runs: true, memory: true, flows: true, capsules: true, screenshots: true },
+  policy: { runs: true, memory: true, flows: true, capsules: true, screenshots: true, video: true },
   verify: 'local',
   projectId: 'demo',
   link: `${URL_LINKED}::demo`,
@@ -222,6 +222,7 @@ describe('where background sync sends', () => {
         homeDir: home,
         env,
         otherRoots: () => [],
+        clientVersion: '3.8.0',
         signedIn: () => 'token',
         request: server.request,
         intervalMs: INTERVAL,

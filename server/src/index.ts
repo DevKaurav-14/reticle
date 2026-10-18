@@ -220,7 +220,6 @@ export async function start(options: StartOptions = {}): Promise<RunningServer> 
     env: process.env,
     otherRoots: knownProjectRoots,
     clientVersion: SERVER_VERSION,
-    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
   });
   const security = await resolveBridgeSecurityWithAutoToken(options);
   const bridge = new Bridge({ port, sdkFix: sdkFixForProject, ...security });

@@ -694,12 +694,16 @@ export function attachCloudSync(deps: {
   env: NodeJS.ProcessEnv;
   otherRoots: () => readonly string[];
   clientVersion: string;
-  /** The signed-in session's token for a platform address, or undefined. See `signedInTo`. */
-  signedIn: (url: string) => string | undefined;
+  /**
+   * The signed-in session's token for a platform address, or undefined. See `signedInTo`. Given by
+   * the background daemon only: `start()`'s one cycle on close also serves CI, keyed by the env.
+   */
+  signedIn?: (url: string) => string | undefined;
   /** Injected for the tests. */
   request?: SyncDaemonDeps['request'];
   intervalMs?: number;
 }): SyncDaemon {
+  const signedIn = deps.signedIn;
   return startSyncDaemon({
     reticleRoot: deps.reticleRoot,
     clientVersion: deps.clientVersion,
@@ -713,8 +717,12 @@ export function attachCloudSync(deps: {
     // Watching them too means one recursive watcher per linked repo — add it if siblings lag.
     watch: (onChange) => watchReticleRoot(deps.reticleRoot, onChange),
     // Sent only while somebody is signed in, to a linked project that did not switch it off.
-    gate: (root, cloud) =>
-      backgroundSyncGate({ reticleRoot: root, cloud, env: deps.env, signedIn: deps.signedIn }),
+    ...(signedIn === undefined
+      ? {}
+      : {
+          gate: (root: string, cloud: ProjectCloud) =>
+            backgroundSyncGate({ reticleRoot: root, cloud, env: deps.env, signedIn }),
+        }),
     ...(deps.request === undefined ? {} : { request: deps.request }),
     ...(deps.intervalMs === undefined ? {} : { intervalMs: deps.intervalMs }),
   });
