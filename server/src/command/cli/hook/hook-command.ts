@@ -24,9 +24,12 @@ import { ReticleEnv } from '@reticlehq/core';
 import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js';
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
+import { captureToolCall } from './tool-hook.js';
 
 const HookAction = {
   PROMPT: 'prompt',
+  /** What the agent's post-tool hook runs: one of the agent's own tool calls. */
+  TOOL: 'tool',
   INSTALL: 'install',
   UNINSTALL: 'uninstall',
   STATUS: 'status',
@@ -165,6 +168,12 @@ export async function handleHook(
     process.stdout.write(hookAck(agent));
     return 0;
   }
+  if (HookAction.TOOL === action) {
+    const at = argv.indexOf(AGENT_FLAG);
+    const agent = (-1 === at ? undefined : argv[at + 1]) ?? DEFAULT_AGENT;
+    captureToolCall(agent, await readStdin(), { cwd, env: process.env, now: () => Date.now() });
+    return 0;
+  }
   if (HookAction.INSTALL === action) return install(cwd, print);
   if (HookAction.UNINSTALL === action) return uninstall(cwd, print);
   if (HookAction.STATUS === action) {
@@ -172,6 +181,8 @@ export async function handleHook(
     for (const row of rows) print(row);
     return 0;
   }
-  print(`unknown hook action: ${action}. Use install, uninstall, status or prompt --agent <id>.`);
+  print(
+    `unknown hook action: ${action}. Use install, uninstall, status, prompt --agent <id> or tool --agent <id>.`,
+  );
   return 1;
 }

@@ -480,7 +480,9 @@ const REACHES_FOR: Record<string, readonly string[]> = {
    * prompt was sent in (`config`), and keeps the prompt with the one recorder `reticle_intent`
    * uses (`intent`), so the two writers cannot keep the request in two shapes.
    */
-  hook: ['config', 'intent'],
+  // `journal` for the episode log's record version: the post-tool hook writes into the same files.
+  // `journal` imports nothing from `hook`, so this adds no mutual pair.
+  hook: ['config', 'intent', 'journal'],
   // What a run artifact is FOR once it exists -- stored, compared, and read back as established
   // fact -- as against the rest of `runs`, which produces one. Named `artifact`, singular, and it
   // must stay singular: `core/src/artifacts` is a different package and a different node, and
