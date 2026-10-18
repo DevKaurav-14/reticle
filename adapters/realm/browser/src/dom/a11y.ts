@@ -439,12 +439,11 @@ function hiddenByAnOverlay(el: Element): boolean {
 }
 
 /**
- * Whether the element's OWN box hides it — one forced-style resolution, no composed ancestor
- * walk. The one ancestor reading is `hiddenInsideClosedDetails`, which consults only the nearest
- * `<details>` boundary; composing the chain is still isVisible's job.
+ * Whether the element's OWN box is hidden by a non-ARIA mechanism: CSS, the `hidden` attribute,
+ * or a closed `<details>`. Shared by `selfHidden` and `isHiddenByAriaOnly` so the checks stay
+ * in one place — #1111/#1112 are changing `selfHidden`, and a copy will drift.
  */
-function selfHidden(el: Element, style: CSSStyleDeclaration | null): boolean {
-  if ('true' === el.getAttribute('aria-hidden') && !hiddenByAnOverlay(el)) return true;
+function selfCssHidden(el: Element, style: CSSStyleDeclaration | null): boolean {
   if (isHtmlElement(el) && el.hidden) return true;
   if (hiddenInsideClosedDetails(el)) return true;
   if (style !== null) {
@@ -458,6 +457,53 @@ function selfHidden(el: Element, style: CSSStyleDeclaration | null): boolean {
     if (0 === Number.parseFloat(style.opacity || '1') && !stalledFade(el)) return true;
   }
   return false;
+}
+
+/**
+ * Whether the element's OWN box hides it — one forced-style resolution, no composed ancestor
+ * walk. The one ancestor reading is `hiddenInsideClosedDetails`, which consults only the nearest
+ * `<details>` boundary; composing the chain is still isVisible's job.
+ */
+function selfHidden(el: Element, style: CSSStyleDeclaration | null): boolean {
+  if ('true' === el.getAttribute('aria-hidden') && !hiddenByAnOverlay(el)) return true;
+  return selfCssHidden(el, style);
+}
+
+/**
+ * Whether the element is hidden ONLY because of `aria-hidden="true"` on itself or an ancestor,
+ * and not by any CSS/HTML mechanism. Walks the full ancestor chain across shadow boundaries.
+ *
+ * Returns `false` when ANY ancestor has `display:none`, `visibility:hidden`, `opacity:0`,
+ * `[hidden]`, or sits inside a closed `<details>` — in those cases the element is invisible
+ * regardless of `aria-hidden`, and blaming the attribute would mislead the caller (#1070).
+ */
+export function isHiddenByAriaOnly(el: Element): boolean {
+  let foundAriaHidden = false;
+  let current: Element | null = el;
+  while (null !== current) {
+    if ('true' === current.getAttribute('aria-hidden')) foundAriaHidden = true;
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current) ?? null;
+    if (selfCssHidden(current, style)) return false;
+    current = parentAcrossShadowBoundary(current);
+  }
+  return foundAriaHidden;
+}
+
+/**
+ * Whether the element is rendered on screen AND not inside an `aria-hidden` subtree.
+ * Returns `false` when any ancestor is CSS-hidden OR carries `aria-hidden="true"`.
+ * Used by the hint builder to suppress the aria-hidden note when a visible, accessible
+ * element also carries the searched text (#1070).
+ */
+export function isRenderedOutsideAriaHidden(el: Element): boolean {
+  let current: Element | null = el;
+  while (null !== current) {
+    if ('true' === current.getAttribute('aria-hidden')) return false;
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current) ?? null;
+    if (selfCssHidden(current, style)) return false;
+    current = parentAcrossShadowBoundary(current);
+  }
+  return true;
 }
 
 /**
@@ -838,12 +884,29 @@ export function isInViewport(el: Element, memo?: Map<Element, boolean>): boolean
   return r.bottom > 0 && r.right > 0 && r.top < view.innerHeight && r.left < view.innerWidth;
 }
 
+/**
+ * A box of no size that clips its own overflow shows nothing: a control collapsed to 0×0 read
+ * `visible` and a visible-state check on it held. Only an element that clips is judged, because an
+ * unclipped one can still show content overflowing it; one with no layout box (display: contents)
+ * is left alone.
+ */
+function collapsed(el: Element, memo: Map<Element, VisibilityInfo>): boolean {
+  const own = ownVisibilityInfo(el, memo);
+  if (!own.clipX && !own.clipY) return false;
+  const rects = Array.from(el.getClientRects());
+  return (
+    rects.length > 0 &&
+    rects.every((r) => (own.clipX && 0 === r.width) || (own.clipY && 0 === r.height))
+  );
+}
+
 /** Visibility combines inherited CSS/ARIA hiding with this target's surviving clipping region. */
 export function isVisible(el: Element, memo?: Map<Element, boolean>): boolean {
   if (!el.isConnected) return false;
   const cached = memo?.get(el);
   if (cached !== undefined) return cached;
-  const result = visibleBounds(el, visibilityInfoMemo(memo), undefined, true) !== null;
+  const info = visibilityInfoMemo(memo);
+  const result = visibleBounds(el, info, undefined, true) !== null && !collapsed(el, info);
   if (memo !== undefined) memo.set(el, result);
   return result;
 }

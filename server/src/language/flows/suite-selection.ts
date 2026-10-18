@@ -15,6 +15,7 @@ import { FLOW_FILE_VERSION, orderFlows, selectFlows, type FlowFile } from '@reti
 import { flowsForSession } from './flow-store-for-session.js';
 import type { ProjectTarget } from '@/memory/project/session-root.js';
 import type { ToolDeps } from '@/surface/tools/tool-kit.js';
+import { readyForReplay, replayability } from './flow-replayable.js';
 
 /**
  * Resolve what a suite run should replay, and what it is holding back.
@@ -34,6 +35,8 @@ export async function resolveSuiteSelection(
   run: string[];
   quarantined: string[];
   unmatched: string[];
+  /** Flows held back by `skipWrites`: replaying them would send their write requests again. */
+  writing?: string[];
   /** Flows in a dependency cycle — none of them ran. */
   cycles?: string[];
   /** A flow whose prerequisite is not in this run, so it did not run either. */
@@ -81,23 +84,28 @@ export async function resolveSuiteSelection(
     ...(0 === wantedLabels.length ? {} : { labels: wantedLabels }),
   });
   /*
-   * A name the caller asked for that no file matches is still ATTEMPTED.
-   *
-   * Replay already answers a missing flow with the real reason, and that is a better answer than
-   * quietly running one fewer flow than was asked for. `unmatched` therefore reports labels, where
-   * a typo has no other way of surfacing -- ask for `@smoek` and, without this, a suite of zero
-   * flows reports a clean pass.
+   * A name no saved flow carries is refused before anything runs. It used to be ATTEMPTED, so a
+   * typo became a failed check and a failed run on the dashboard, with "check the element state" as
+   * the advice. `unmatched` still reports labels, where a typo has no other way of surfacing -- ask
+   * for `@smoek` and, without it, a suite of zero flows reports a clean pass.
    */
-  const missingNames = wantedNames.filter((name) => !names.includes(name));
+  const unknown = unknownFlowRefusal(wantedNames, names);
+  if (unknown !== undefined) throw unknown;
   /*
    * Ordered AFTER selection, so a prerequisite filtered out by a label is reported rather than
    * silently pulled back in. A flow whose `login` was excluded does not run: failing it here would
    * produce a failure about the wrong thing, and quietly adding `login` back would run a flow the
    * caller did not ask for.
    */
-  const ordered = orderFlows(chosen.run);
+  /*
+   * A certify run must not change real data. A flow whose step sent a write request when it was
+   * recorded (or whose expect names one) is held back and named, never replayed, when asked.
+   */
+  const writing = true === args['skipWrites'] ? writingFlows(chosen.run) : [];
+  const ordered = orderFlows(chosen.run.filter((flow) => !writing.includes(flow.name)));
   return {
-    run: [...ordered.run.map((flow) => flow.name), ...missingNames],
+    run: ordered.run.map((flow) => flow.name),
+    ...(0 === writing.length ? {} : { writing }),
     quarantined: chosen.quarantined,
     unmatched: chosen.unmatched.filter((entry) => !wantedNames.includes(entry)),
     ...(0 === ordered.cycles.length ? {} : { cycles: ordered.cycles }),
@@ -110,4 +118,36 @@ export async function resolveSuiteSelection(
       ),
     ],
   };
+}
+
+/** The flows a replay would change real data with: a step sent, or expects, a write request. */
+export function writingFlows(flows: readonly FlowFile[]): string[] {
+  return flows
+    .filter((flow) => true === replayability(readyForReplay(flow)).writes)
+    .map((flow) => flow.name);
+}
+
+/** How the refusal of an unknown flow name opens: the error table recognizes it by these words. */
+export const UNKNOWN_FLOW_OPENING = 'No saved flow is named';
+
+/** How many saved flow names a refusal lists before it says how many more there are. */
+const KNOWN_SHOWN = 10;
+
+/**
+ * The refusal for flow names no saved flow carries, or `undefined` when every name is known. Names
+ * the flows that do exist, so the typo can be fixed in the next call.
+ */
+export function unknownFlowRefusal(
+  wanted: readonly string[],
+  known: readonly string[],
+): Error | undefined {
+  const missing = wanted.filter((name) => !known.includes(name));
+  if (0 === missing.length) return undefined;
+  const asked = missing.map((name) => `"${name}"`).join(', ');
+  const more = known.length - KNOWN_SHOWN;
+  const saved =
+    0 === known.length
+      ? 'No flows are saved for this project yet: drive the journey once and it is saved.'
+      : `Saved flows: ${known.slice(0, KNOWN_SHOWN).join(', ')}${more > 0 ? `, and ${String(more)} more (reticle_flow {action:"list"})` : ''}.`;
+  return new Error(`${UNKNOWN_FLOW_OPENING} ${asked}, so nothing ran. ${saved}`);
 }

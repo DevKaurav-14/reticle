@@ -94,11 +94,14 @@ export class FakeBrowser {
   }
 
   /** Re-send the HELLO on the live socket, the way the SDK does when capabilities register late. */
-  reannounce(overrides: { sessionId?: string; hasCapabilities?: boolean } = {}): void {
+  reannounce(
+    overrides: { sessionId?: string; hasCapabilities?: boolean; projectId?: string } = {},
+  ): void {
     this.#send({
       kind: MessageKind.HELLO,
       protocolVersion: 1,
       sessionId: overrides.sessionId ?? this.sessionId,
+      ...(overrides.projectId === undefined ? {} : { projectId: overrides.projectId }),
       url: 'http://localhost:3000/checkout',
       title: 'Checkout',
       adapters: [],

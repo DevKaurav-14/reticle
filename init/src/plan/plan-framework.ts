@@ -222,6 +222,22 @@ export function nextSteps(input: PlanInput): Step[] {
         ]
       : [];
 
+  // Each route-group root layout renders only its own routes, so one mount covers one group: the
+  // routes under the other root layouts render without ReticleDev, and saying nothing about them
+  // would read as an app that is fully wired.
+  const unmounted = input.nextUnmountedLayouts ?? [];
+  const otherRootLayouts: Step[] =
+    null !== layout && 0 < unmounted.length
+      ? [
+          {
+            title: StepTitle.ROUTE_GROUPS_WITHOUT_RETICLE_DEV,
+            target: unmounted.join(', '),
+            status: StepStatus.NOTICE,
+            detail: `<ReticleDev /> is mounted in ${layout.path} only; ${unmounted.join(', ')} ${1 === unmounted.length ? 'is a root layout' : 'are root layouts'} of ${1 === unmounted.length ? 'its' : 'their'} own, so the routes under ${1 === unmounted.length ? 'it' : 'them'} render without it and Reticle sees nothing there. Mount it there too (dev-only) to cover them.`,
+          },
+        ]
+      : [];
+
   return [
     devFile,
     ...nextTodo,
@@ -239,6 +255,7 @@ export function nextSteps(input: PlanInput): Step[] {
       'mount <ReticleDev /> in the root layout (dev-only)',
       NEXT_LAYOUT_MANUAL,
     ),
+    ...otherRootLayouts,
   ];
 }
 

@@ -26,7 +26,7 @@ vi.mock('@/log.js', () => ({ log: vi.fn() }));
 const URL_LINKED = 'http://localhost:8890';
 const LINKED: ProjectCloud = {
   config: { url: URL_LINKED, apiKey: 'rk_test' },
-  policy: { runs: true, memory: true, flows: true, capsules: true, screenshots: true },
+  policy: { runs: true, memory: true, flows: true, capsules: true, screenshots: true, video: true },
   verify: 'local',
   projectId: 'demo',
   link: `${URL_LINKED}::demo`,
@@ -89,15 +89,18 @@ function platform() {
   };
 }
 
-function daemon(server: ReturnType<typeof platform>, gate: () => BackgroundSyncGate) {
+function daemon(
+  server: ReturnType<typeof platform>,
+  gate: () => BackgroundSyncGate,
+  intervalMs = INTERVAL,
+) {
   return startSyncDaemon({
     reticleRoot: root,
     cloud: () => Promise.resolve(LINKED),
     request: server.request,
-    intervalMs: INTERVAL,
+    intervalMs,
     gate,
     fingerprint: localFingerprint,
-    random: () => 0.5,
   });
 }
 
@@ -177,11 +180,12 @@ describe('background sync', () => {
     const server = platform();
     server.set('down');
     writeRun('r1', 'a request');
-    const d = daemon(server, () => ON);
-    await vi.advanceTimersByTimeAsync(20 * INTERVAL);
-    // A failed cycle makes two calls, so one cycle per interval would be forty. Doubling waits
-    // leave a handful.
-    expect(server.calls.length).toBeLessThanOrEqual(10);
+    // The production backstop: a failed cycle retries after a minute, doubling up to it.
+    const d = daemon(server, () => ON, 600_000);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    // A failed cycle makes two calls, so a retry every minute would be 120 in the hour. Doubling
+    // waits capped at the backstop leave about nine cycles.
+    expect(server.calls.length).toBeLessThanOrEqual(20);
     expect(d.background().failures).toBeGreaterThan(1);
     expect(d.background().lastError).toBeDefined();
     server.set('ok');
@@ -230,6 +234,7 @@ describe('where background sync sends', () => {
         env,
         otherRoots: () => [],
         signedIn: () => 'token',
+        clientVersion: 'test',
         request: server.request,
         intervalMs: INTERVAL,
       });

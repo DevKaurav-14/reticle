@@ -10,7 +10,13 @@
  * only chooses what to hand it.
  */
 
-import { isDangerousActionText, outwardActionOf, outwardRefusal } from '@reticlehq/core';
+import {
+  OutwardAction,
+  isDangerousActionText,
+  isPaymentField,
+  outwardActionOf,
+  outwardRefusal,
+} from '@reticlehq/core';
 import { getAccessibleName, getRole } from '@/dom/a11y.js';
 import { type ActionTarget, isHtmlElement } from '@/dom/realm.js';
 
@@ -121,4 +127,20 @@ export function assertOutwardAllowed(targets: readonly (ActionTarget | null)[]):
     const kind = outwardActionOf(dangerousActionContext(el), getRole(el));
     if (kind !== undefined && !outwardAllowed.includes(kind)) throw new Error(outwardRefusal(kind));
   }
+}
+
+/**
+ * Refuse to type card or bank details unless the journey asked to pay. With a button's words no
+ * longer read as paying ("Start free trial"), this and a link to a payment provider are the boundary.
+ */
+export function assertPaymentEntryAllowed(el: ActionTarget): void {
+  if (outwardAllowed === undefined || outwardAllowed.includes(OutwardAction.PAY)) return;
+  const facts = {
+    autocomplete: el.getAttribute('autocomplete') ?? undefined,
+    name: el.getAttribute('name') ?? undefined,
+    id: el.getAttribute('id') ?? undefined,
+    inputMode: el.getAttribute('inputmode') ?? undefined,
+    label: `${getAccessibleName(el)} ${el.getAttribute('placeholder') ?? ''}`,
+  };
+  if (isPaymentField(facts)) throw new Error(outwardRefusal(OutwardAction.PAY));
 }

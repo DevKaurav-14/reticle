@@ -12,6 +12,7 @@
  */
 import { PredicateSchema } from '@reticlehq/engine/question/predicate/predicate-schema.js';
 import { SESSION_REF, isGlobalPressCall, unissuedRefRefusal } from '@reticlehq/core';
+import { isDocumentGoneError } from '@/portal/session/facts/session-replaced.js';
 import { SessionReplacedError } from '@/portal/session/page-commands/pending-commands.js';
 import { assertNativeInputSupported } from './act-danger.js';
 import {
@@ -200,7 +201,7 @@ export async function dispatchAct<T>(send: () => Promise<T>): Promise<T | null> 
   try {
     return await send();
   } catch (error: unknown) {
-    if (error instanceof SessionReplacedError) return null;
+    if (error instanceof SessionReplacedError || isDocumentGoneError(error)) return null;
     throw error;
   }
 }

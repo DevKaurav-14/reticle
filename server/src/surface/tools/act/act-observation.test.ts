@@ -3,8 +3,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { dispatchAct } from './act-preflight.js';
-import { SessionReplacedError } from '@/portal/session/page-commands/pending-commands.js';
-import { CommandTimeoutError } from '@/portal/session/page-commands/pending-commands.js';
+import {
+  CommandTimeoutError,
+  SessionReplacedError,
+} from '@/portal/session/page-commands/pending-commands.js';
+import { SESSION_DISCONNECTED_REASON } from '@/portal/session/facts/session-replaced.js';
 import { checkNet, followLostObservation } from './act-observation.js';
 import type { Session } from '@/portal/session/session.js';
 
@@ -17,6 +20,11 @@ describe('dispatchAct', () => {
 
   it('reports a displaced write as unobserved rather than throwing transport at the caller', async () => {
     const out = await dispatchAct(() => Promise.reject(new SessionReplacedError('replaced')));
+    expect(out).toBeNull();
+  });
+
+  it('reports a plain socket close as unobserved rather than throwing transport at the caller', async () => {
+    const out = await dispatchAct(() => Promise.reject(new Error(SESSION_DISCONNECTED_REASON)));
     expect(out).toBeNull();
   });
 

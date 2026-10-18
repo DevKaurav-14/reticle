@@ -13,7 +13,14 @@
  * editor.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { acquireLease, exploreToEnd, runAdhocVerdict, type ToolCaller } from './adhoc-verdict.js';
+import {
+  ASSERT_MAX_WAIT_MS,
+  acquireLease,
+  exploreToEnd,
+  runAdhocVerdict,
+  type ToolCaller,
+} from './adhoc-verdict.js';
+import { MAX_BLOCKING_WAIT_MS } from '@/surface/tools/args/numeric-bounds.js';
 import { ReticleTool } from '@reticlehq/core';
 
 /** A fake daemon: records what was asked, answers with the verdict it was given. */
@@ -55,7 +62,10 @@ describe('a one-shot verdict against the running daemon', () => {
 
   it('passes the predicate through untouched', async () => {
     const { calls } = await run({ verified: 'yes' });
-    expect(calls[1]?.args).toEqual({ predicate: { kind: 'text', contains: 'Dashboard' } });
+    expect(calls[1]?.args).toEqual({
+      predicate: { kind: 'text', contains: 'Dashboard' },
+      timeout_ms: 4000,
+    });
   });
 });
 
@@ -388,5 +398,80 @@ describe('a Harness drive polled to its end', () => {
     };
     const result = await exploreToEnd(caller, {}, 150_000, () => t);
     expect(result).toEqual(text({ status: 'running', runId: 'harness-2' }));
+  });
+});
+
+/**
+ * `--expect` waits for its expectation, and the grade is still `reticle_assert`'s (#1533).
+ *
+ * It judged once, about a second after navigating, while the request the predicate named was
+ * usually still in flight. The wait must not cost the verdict its journal, its captured assertion
+ * or its `verifiedReason`, which only `reticle_assert` produces.
+ */
+describe('a one-shot verdict waits for its expectation', () => {
+  /** A daemon that answers each call with the next scripted payload, recording what it was asked. */
+  function scripted(answers: unknown[]) {
+    const calls: { name: string; args: Record<string, unknown> }[] = [];
+    const connect = (): Promise<ToolCaller> =>
+      Promise.resolve({
+        call: (name, args) => {
+          calls.push({ name, args });
+          return Promise.resolve(answers.shift() ?? { structuredContent: { verified: 'yes' } });
+        },
+        close: () => Promise.resolve(),
+      });
+    return { calls, connect };
+  }
+  const expectIt = (timeoutMs: number | undefined, connect: () => Promise<ToolCaller>) =>
+    runAdhocVerdict({
+      port: 4400,
+      predicate: { kind: 'net', urlContains: '/api/data' },
+      connect,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+
+  it('grades with one reticle_assert that waits the --timeout budget', async () => {
+    const d = scripted([]);
+    const result = await expectIt(30_000, d.connect);
+    expect(d.calls.map((c) => [c.name, c.args['timeout_ms']])).toEqual([
+      [ReticleTool.ASSERT, 30_000],
+    ]);
+    expect(result.code).toBe(0);
+  });
+
+  it('settles the part of a long budget one assert cannot hold, then asserts', async () => {
+    const d = scripted([
+      { structuredContent: { pass: false, resume_ms: 5_000 } },
+      { structuredContent: { pass: false } },
+    ]);
+    await expectIt(80_000, d.connect);
+    expect(d.calls.map((c) => c.name)).toEqual([
+      ReticleTool.RUN,
+      ReticleTool.RUN,
+      ReticleTool.ASSERT,
+    ]);
+    expect(
+      d.calls.map((c) => (c.args['args'] as { timeout_ms?: number } | undefined)?.timeout_ms),
+    ).toEqual([25_000, 5_000, undefined]);
+    expect(d.calls[0]?.args['tool']).toBe(ReticleTool.WAIT_FOR);
+    expect(d.calls[2]?.args['timeout_ms']).toBe(ASSERT_MAX_WAIT_MS);
+  });
+
+  it('says the refusal when reticle_run answers one as data', async () => {
+    const d = scripted([{ structuredContent: { error: 'timeout_ms must be at most 600000' } }]);
+    const result = await expectIt(700_000, d.connect);
+    expect(result.code).toBe(1);
+    expect(result.lines).toEqual(['verified: unknown', 'timeout_ms must be at most 600000']);
+    expect(d.calls.map((c) => c.name)).not.toContain(ReticleTool.ASSERT);
+  });
+
+  it('waits the wait form default when no --timeout is given', async () => {
+    const d = scripted([]);
+    await expectIt(undefined, d.connect);
+    expect(d.calls[0]?.args['timeout_ms']).toBe(4000);
+  });
+
+  it('names the assert cap the tool layer enforces', () => {
+    expect(ASSERT_MAX_WAIT_MS).toBe(MAX_BLOCKING_WAIT_MS);
   });
 });

@@ -155,6 +155,11 @@ Perform one action / several in order.
 | `occluded` | `click`/`dblclick` only: the click point hit-tested to a _foreign_ element (an overlay is on top). Synthetic dispatch still delivered the event, but **a real user could not click it**, so treat the target as visually blocked. `false` when not click-like or not hit-testable |
 | `occludedBy` | the ref of the element actually on top at the click point when `occluded`, else `null` |
 | `scrolledIntoView` | `click`/`dblclick` only: the target was off-viewport, so Reticle scrolled it into view before dispatch |
+| `occluderName` | when `occluded`: what covers the target, in words (its test id, else its role and name, else its tag). Omitted otherwise |
+| `noSize` | click-like only: the target is laid out with no size, so a person has nothing to click. Omitted otherwise |
+| `offViewport` | click-like only: the target is still outside the viewport after it was scrolled into view. Omitted otherwise |
+
+A verdict drawn over a click with `occluded`, `noSize` or `offViewport` is `unknown` (`verifiedReason: "inconclusive"`), never `yes`: synthetic dispatch reached the target, so the consequence can hold, but no person could have made that click. `because` names the cause and the fix. A replayed flow step reads the same rule: the step drifts with `target_unreachable`, so the replay is `unknown`, never green.
 
 Use it to distinguish failure modes: `visible:false`/`enabled:false`/`targetMatched:false` → your action missed; the tool throwing → it never dispatched; `occluded:true` → the control is covered by something (a real user is blocked even though the synthetic event landed); `defaultPrevented:true` or all of `valueChanged:false`/`focusMoved:null`/`domMutatedWithin:0` → the app didn't react.
 
@@ -207,8 +212,9 @@ Verify a predicate; optionally wait for it.
 
 Compare what the API **returned** against what the page **renders**.
 
-- **args:** `since?`, `urlContains?`, `sessionId?`.
-- **returns:** `{ mismatches, compared, note? }`.
+- **args:** `since?`, `urlContains?`, `scope?`, `witness?`, `sessionId?`.
+- **returns:** `{ mismatches, compared, note?, witness? }`.
+- **`scope`** is a ref or CSS selector, for example `"#status"`. The tool then compares only against that subtree. Use it when the whole page is too large to read completely, for example a dashboard of large native selects, and the API feeds one region. Every cut branch under the scope is still read. A scope that matches no element is refused, never read as an empty page.
 - Catches the class no status code and no assertion can reach: a `USD 7997` amount rendered as `₹79.97`, or a record the API calls `on_hold` displayed as `"pending"`. Both sides agree on the digits; only the meaning differs, so every other channel reports success.
 - Needs response bodies: `connect({ captureNetworkBodies: true })`. When nothing could be compared it says so in `note` rather than returning an empty, clean-looking result over data it never read.
 

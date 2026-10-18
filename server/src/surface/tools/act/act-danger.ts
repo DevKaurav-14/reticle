@@ -2,7 +2,9 @@ import {
   ActionType,
   DANGEROUS_ACTION_CONFIRM_ARG,
   NATIVE_INPUT_ARG,
+  OutwardAction,
   isDangerousActionText,
+  isPaymentProviderUrl,
   outwardActionOf,
   outwardRefusal,
 } from '@reticlehq/core';
@@ -49,6 +51,13 @@ function assertOutwardAllowed(...descriptors: unknown[]): void {
     const kind = outwardActionOf(descriptorText(descriptor), descriptorRole(descriptor));
     if (kind !== undefined && !allowed.includes(kind)) throw new Error(outwardRefusal(kind));
   }
+}
+
+/** A Harness call goes to a payment provider's origin only when its journey asked to pay. */
+export function assertNotPaymentNavigation(url: string): void {
+  const allowed = harnessOutwardAllowed();
+  if (allowed === undefined || allowed.includes(OutwardAction.PAY)) return;
+  if (isPaymentProviderUrl(url)) throw new Error(outwardRefusal(OutwardAction.PAY));
 }
 
 export function assertNotDestructive(

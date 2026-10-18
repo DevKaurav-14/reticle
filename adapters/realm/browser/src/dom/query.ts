@@ -20,10 +20,12 @@ import {
   getRole,
   describe,
   getStates,
+  isHiddenByAriaOnly,
   isInViewport,
+  isRenderedOutsideAriaHidden,
   isVisible,
 } from './a11y.js';
-import { isIgnored, isReticleOverlay } from './dom-ignore.js';
+import { isIgnored, isReticleOverlay, isWordsIgnored } from './dom-ignore.js';
 import { isSensitiveKey } from '@/security/serialization.js';
 import { declaredTestids } from '@/registry/capabilities.js';
 import { identifyComponent } from '@/registry/stores/adapters.js';
@@ -118,7 +120,7 @@ function directText(el: Element): string {
  * leaves ours out, which pointing an agent at "Pause" or "Export" did not.
  */
 function visibleTextOf(el: Element, memo: Map<Element, boolean>): string {
-  if (isNonRendered(el) || isIgnored(el)) return '';
+  if (isNonRendered(el) || isWordsIgnored(el)) return '';
   const visible = isVisible(el, memo);
   const apart = laysOutApart(el);
   let text = '';
@@ -258,6 +260,63 @@ function matchesRole(actual: string, queried: string): boolean {
   return false;
 }
 
+const OPTION_ROLE = 'option';
+const HTML_OPTION_TAG = 'option';
+const HTML_SELECT_TAG = 'select';
+/**
+ * The visually-hidden bubble. A control a person can use is larger than a 1×1 clip; that size is
+ * the convention libraries use to keep a native select out of the page.
+ */
+const VISUALLY_HIDDEN_MAX_PX = 1;
+
+/** A native `<option>` whose owning `<select>` is not a control a person can click. */
+export function isHiddenNativeOption(el: HTMLElement): boolean {
+  if (HTML_OPTION_TAG !== el.localName) return false;
+  const select = el.closest(HTML_SELECT_TAG);
+  if (!isSelect(select)) return false;
+  if (!isVisible(select)) return true;
+  return isVisuallyHiddenBox(select);
+}
+
+/**
+ * The bubble's own shape: a measured box no larger than 1×1. A 0×0 box is not enough, because a
+ * closed `<select>` with no layout yet (and every node in jsdom) measures 0×0 and is still the
+ * control a person uses, so its options keep counting for role queries.
+ */
+function isVisuallyHiddenBox(select: HTMLSelectElement): boolean {
+  const box = select.getBoundingClientRect();
+  return (
+    box.width > 0 &&
+    box.height > 0 &&
+    box.width <= VISUALLY_HIDDEN_MAX_PX &&
+    box.height <= VISUALLY_HIDDEN_MAX_PX
+  );
+}
+
+/**
+ * Prefer a visible actionable option over a hidden native duplicate.
+ *
+ * Radix (and the same shape elsewhere) keeps a native `<option>` inside a 1×1 clipped `<select>`
+ * so a form can submit, and paints the choice a person clicks as `role="option"` in a portal.
+ * Both compute the same accessible name. The native node is first in the document, so a role+name
+ * anchor resolved to it, replay dispatched a click, and the selected value never moved — the
+ * handler lives on the portal node. The visibility walk does not catch this: the bubble select is
+ * not `display:none` or `aria-hidden`, and an `<option>` has no layout box of its own, so both
+ * come back `visible`.
+ *
+ * Drop every native `<option>` whose `<select>` is not a control a person can use. When a portal
+ * duplicate exists it is the one replay should target; when the dropdown is closed and only the
+ * hidden native node remains, resolving or clicking it still cannot change the selection, so the
+ * match is refused rather than reported as success. A real `<select>` the user can see is unchanged.
+ *
+ * Returns the original array when nothing is dropped, so a unique match keeps its identity.
+ */
+function preferVisibleActionableOption(role: string, matches: HTMLElement[]): HTMLElement[] {
+  if (OPTION_ROLE !== role) return matches;
+  const kept = matches.filter((el) => !isHiddenNativeOption(el));
+  return kept.length === matches.length ? matches : kept;
+}
+
 /**
  * Role + name, matched with the same local accessibility engine used to describe results.
  *
@@ -270,11 +329,12 @@ function queryByRoleAndName(
   role: string,
   name: string | undefined,
 ): HTMLElement[] {
-  return elementsUnder(container).filter(
+  const matched = elementsUnder(container).filter(
     (el) =>
       matchesRole(getRole(el), role) &&
       (name === undefined || exactVisibleText(getAccessibleName(el), name)),
   );
+  return preferVisibleActionableOption(role, matched);
 }
 
 function queryByText(container: HTMLElement, value: string, query: ElementQuery): HTMLElement[] {
@@ -478,6 +538,8 @@ function findCandidates(query: ElementQuery): { candidates: HTMLElement[]; scope
   }
   const seen = new Set<HTMLElement>();
   const out: HTMLElement[] = [];
+  // A text search reads the app's words only: the HUD's never prove a text claim, hatch open or not.
+  const ignored = wantedTextOf(query) === undefined ? isIgnored : isWordsIgnored;
   const collect = (els: HTMLElement[]): void => {
     for (const el of els) {
       if (seen.has(el)) continue; // reachable from both host and root - count once
@@ -488,7 +550,7 @@ function findCandidates(query: ElementQuery): { candidates: HTMLElement[]; scope
       // share a NAME with a real control on that page, so an agent resolving "Export" could drive the
       // observer instead of the app and then reason about the result. Filtered here, at the one
       // collection point, so every entry path (by role/text/testid, shadow roots, scoped) is covered.
-      if (isIgnored(el)) continue;
+      if (ignored(el)) continue;
       seen.add(el);
       out.push(el);
     }
@@ -555,6 +617,7 @@ export function matchQuery(
    * asking for elements whose own text holds it, and names the container in its hint instead.
    */
   wholePhrase = true,
+  diagnose: boolean = true,
 ): MatchResult {
   // NO blanket try/catch here. It would turn ANY exception during candidate-finding into
   // `elements = []`, which is the same lie as the `default` arm above: a query that could not run
@@ -604,7 +667,7 @@ export function matchQuery(
     // PREDICATE uses, so without this a failed assertion was a dead end ("no element matched") while
     // the identical failure through reticle_query listed the testids that ARE present. Computed only
     // when there is nothing to report, so the hot path pays nothing.
-    ...(0 === filtered.length ? { hint: buildEmptyHint(query) } : {}),
+    ...(0 === filtered.length ? { hint: buildEmptyHint(query, state, diagnose) } : {}),
   };
 }
 
@@ -818,8 +881,32 @@ function testidFoundUnder(container: HTMLElement, query: ElementQuery): string |
   return undefined;
 }
 
+function textInAriaHidden(container: HTMLElement, wanted: string): boolean {
+  let inAriaHidden = false;
+  for (const el of elementsUnder(container)) {
+    if (isIgnored(el)) continue;
+    if (!isHiddenByAriaOnly(el)) continue;
+    if (fuzzyVisibleText(el.textContent ?? '', wanted)) {
+      inAriaHidden = true;
+      break;
+    }
+  }
+  if (!inAriaHidden) return false;
+  const memo = new Map<Element, boolean>();
+  for (const el of elementsUnder(container)) {
+    if (isIgnored(el)) continue;
+    if (!isRenderedOutsideAriaHidden(el)) continue;
+    if (fuzzyVisibleText(visibleTextOf(el, memo), wanted)) return false;
+  }
+  return true;
+}
+
 /** Diagnostic hint for a zero-match query: what testids ARE present in the searched scope. */
-function buildEmptyHint(query: ElementQuery): QueryEmptyHint {
+function buildEmptyHint(
+  query: ElementQuery,
+  state?: ElementState,
+  diagnose: boolean = true,
+): QueryEmptyHint {
   const container = resolveContainer(query.scope).container ?? document.body;
   const all = container.querySelectorAll(testIdSelector());
   const present: string[] = [];
@@ -858,6 +945,18 @@ function buildEmptyHint(query: ElementQuery): QueryEmptyHint {
       const shown = caseOnlyMatch(container, wanted);
       if (shown !== undefined) hint.caseMiss = shown;
     }
+  }
+  // A text or name match hidden only by aria-hidden — drawn on screen but excluded from the
+  // accessible tree. Only for visibility-related misses: a `state: 'checked'` miss on a visible
+  // element should blame the state, not an unrelated aria-hidden twin (#1070). Gated on `diagnose`
+  // because the scan walks every element in the container and interim poll checks never read it.
+  if (
+    diagnose &&
+    wanted !== undefined &&
+    hint.splitText === undefined &&
+    (state === undefined || ElementState.VISIBLE === state || ElementState.IN_VIEWPORT === state)
+  ) {
+    if (textInAriaHidden(container, wanted)) hint.ariaHiddenMatch = true;
   }
   const near = nameNearMisses(container, query);
   if (near.length > 0) hint.nameNearMiss = near;

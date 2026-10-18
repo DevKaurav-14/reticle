@@ -544,11 +544,29 @@ describe('cloud-cli verb contracts (#555)', () => {
         url: 'http://cloud.test',
         // `capsules` defaults ON — this project's cloud.json is silent about it, and a policy names
         // what it changes rather than inheriting a neighbouring opt-out.
-        sync: { runs: false, memory: true, flows: true, capsules: true, screenshots: false },
+        sync: {
+          runs: false,
+          memory: true,
+          flows: true,
+          capsules: true,
+          screenshots: false,
+          video: false,
+        },
         verify: 'server',
       },
     });
     expect(requests, 'whoami reads local files only').toHaveLength(0);
+  });
+
+  // Persona drive: `reticle connect` wrote the dashboard's address to cloud.json and never said it.
+  it('prints the dashboard address it wrote', async () => {
+    process.env['RETICLE_CLOUD_URL'] = TEST_URL;
+    process.env['RETICLE_CLOUD_KEY'] = TEST_KEY;
+    responder = () => ({
+      body: { projectId: 'proj_1', projectName: 'Proj', dashboardUrl: 'https://app.test/p/proj_1' },
+    });
+    expect(await runCloudCommand(['link'])).toBe(0);
+    expect(stderrBuf).toContain('https://app.test/p/proj_1');
   });
 
   it('link with an explicit key resolves whoami and writes the binding + credential', async () => {
@@ -1100,7 +1118,7 @@ describe('cloud-cli verb contracts (#555)', () => {
 
       expect(code).toBe(0);
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.url).toBe(`${TEST_URL}/v1/memory?projectId=proj_1`);
+      expect(requests[0]?.url).toBe(`${TEST_URL}/v1/memory?projectId=proj_1&limit=100`);
       expect(lastJsonOutput()).toEqual({ projectId: 'proj_1', entries });
     });
 
@@ -1156,7 +1174,7 @@ describe('cloud-cli verb contracts (#555)', () => {
       expect(code).toBe(0);
       // No `projectId=` in the query: there is no linked id to send, and inventing one would scope
       // the read to a project the server has never heard of.
-      expect(requests[0]?.url).toBe(`${TEST_URL}/v1/memory`);
+      expect(requests[0]?.url).toBe(`${TEST_URL}/v1/memory?limit=100`);
       expect(lastJsonOutput()).toEqual({ projectId: 'some-other-project', entries });
     });
   });

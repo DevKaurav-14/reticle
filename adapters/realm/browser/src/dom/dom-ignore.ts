@@ -117,8 +117,10 @@ export function isReticleUi(node: Element | null): boolean {
  * dashboard\"") satisfied the very text predicate the agent was proving, an `already_true` on words
  * the agent itself caused.
  */
+// The act strip's line (`data-reticle-act-line`) says the same words for each call; with the HUD
+// shown it made a visible-text `until` on words the app never rendered come back "yes".
 const HUD_NARRATION =
-  '[data-reticle-log],[data-reticle-harness-log],[data-reticle-chat-pill-text],[data-reticle-agent-said],[data-reticle-agent-note]';
+  '[data-reticle-log],[data-reticle-harness-log],[data-reticle-chat-pill-text],[data-reticle-agent-said],[data-reticle-agent-note],[data-reticle-act-line]';
 
 /** True if the element should be excluded from snapshots/queries (Reticle overlay or dev overlay). */
 export function isIgnored(el: Element): boolean {
@@ -127,6 +129,16 @@ export function isIgnored(el: Element): boolean {
   const ours = exposed() ? HUD_NARRATION : RETICLE_OVERLAY;
   const sel = [ours, DEV_OVERLAYS, extraIgnore].filter((part) => part.length > 0).join(',');
   return el.closest(sel) !== null;
+}
+
+/**
+ * Whether an element's words may never prove a text claim: everything `isIgnored` drops, and
+ * Reticle's own UI hatch open or not. With the HUD exposed, any line it wrote (a plan, a persona, a
+ * finding) proved a visible-text check the app never satisfied. The hatch keeps the HUD's controls
+ * reachable by role and test id; its words are never the app's.
+ */
+export function isWordsIgnored(el: Element): boolean {
+  return isIgnored(el) || isReticleOverlay(el);
 }
 
 /** What an app's modal looks like: a native `<dialog>` shown modally, or a library's `aria-modal`. */

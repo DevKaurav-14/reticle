@@ -7,12 +7,15 @@ import {
   NATIVE_INPUT_ARG,
   SettleReason,
 } from '@reticlehq/core';
+import { isHiddenNativeOption } from '@/dom/query.js';
+import { isReticleUi } from '@/dom/dom-ignore.js';
 import { asSyntheticInput } from './synthetic/synthetic-input.js';
 import { echoRef, refs } from '@/dom/addressing/refs.js';
 import {
   dangerousActionContext,
   requiresDangerousConfirmation,
   assertOutwardAllowed,
+  assertPaymentEntryAllowed,
   submitControlFor,
 } from './danger-context.js';
 import {
@@ -188,6 +191,7 @@ function assertActionAllowed(
     action === ActionType.PRESS && 'Enter' === pressKey(args) ? submitControlFor(el) : null;
   if (canTrigger)
     assertOutwardAllowed([el, submitter, isActionTarget(dragTarget) ? dragTarget : null]);
+  if (action === ActionType.FILL || action === ActionType.TYPE) assertPaymentEntryAllowed(el);
   const sourceDangerous =
     requiresDangerousConfirmation(dangerousActionContext(el), getRole(el)) ||
     (submitter !== null &&
@@ -202,6 +206,11 @@ function assertActionAllowed(
   ) {
     throw new Error(
       `potentially destructive action blocked; retry with args.${DANGEROUS_ACTION_CONFIRM_ARG}=true`,
+    );
+  }
+  if (CLICK_LIKE.has(action) && el instanceof HTMLElement && isHiddenNativeOption(el)) {
+    throw new Error(
+      'cannot click a native <option> inside a visually-hidden <select> — open the dropdown and target the visible option',
     );
   }
 }
@@ -720,6 +729,10 @@ export async function executeAction(
     occluded: geometry.occluded,
     occludedBy: geometry.occludedBy,
     scrolledIntoView: geometry.scrolledIntoView,
+    // Omitted unless they apply: each names a reason a person could not have made this click.
+    ...(geometry.occluderName === undefined ? {} : { occluderName: geometry.occluderName }),
+    ...(true === geometry.noSize ? { noSize: true as const } : {}),
+    ...(true === geometry.offViewport ? { offViewport: true as const } : {}),
     // Omitted when there was no hold: an absent key says "this action does not hold", where a 0
     // would read as "it held for no time", which is a different and misleading claim.
     ...(heldMs > 0 ? { heldMs } : {}),
@@ -737,7 +750,9 @@ export async function executeAction(
       : action === ActionType.HOVER && elementHasHoverHandlers(el)
         ? ActionWarning.HOVER_NATIVE_ENTER_LEAVE
         : undefined;
-  return result(ref, action, effect, settled, settleReason, anchor, warning);
+  const done = result(ref, action, effect, settled, settleReason, anchor, warning);
+  // Only reachable with the HUD exposed: said so the recorder keeps it out of the app's flows.
+  return isReticleUi(el) ? { ...done, reticleUi: true } : done;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => nativeSetTimeout(r, ms));
@@ -765,6 +780,7 @@ interface SequenceStepResult {
   role?: string;
   name?: string;
   source?: { file: string; line: number; column?: number };
+  secret?: true;
   /** best-effort caveat for this step (e.g. synthetic hover may not fire enter/leave). */
   warning?: string;
 }
@@ -792,6 +808,7 @@ export async function executeSequence(steps: ActionStep[]): Promise<{
     if (res.role !== undefined) stepBase.role = res.role;
     if (res.name !== undefined) stepBase.name = res.name;
     if (res.source !== undefined) stepBase.source = res.source;
+    if (res.secret !== undefined) stepBase.secret = res.secret;
     if (res.warning !== undefined) stepBase.warning = res.warning;
     stepResults.push(stepBase);
   }

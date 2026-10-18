@@ -29,10 +29,11 @@ import {
   type PredicateSession,
 } from '@reticlehq/engine/question/predicate/predicate.js';
 import type { Session } from '@/portal/session/session.js';
+import { recoveryFor } from './error-recovery.js';
 import { ReticleTool } from '@reticlehq/core';
 import type { ToolDeps } from './tool-kit.js';
 import { claimedArtifactRoot } from '@/memory/project/root-claims.js';
-import type { BrowserPool, Lease } from '@/portal/pool/browser-pool.js';
+import { PoolAtCapacityError, type BrowserPool, type Lease } from '@/portal/pool/browser-pool.js';
 
 function tool(name: string): (deps: ToolDeps, args: Record<string, unknown>) => Promise<unknown> {
   const def = LEASE_TOOLS.find((t) => t.name === name);
@@ -52,6 +53,7 @@ function fakePool(): {
     seedStorage?: unknown;
     headed?: boolean;
     initScript?: unknown;
+    emulate?: unknown;
   }[];
   /** Every (registeredId, leaseId) pair the lease told the pool about. */
   aliased: [string, string][];
@@ -63,6 +65,7 @@ function fakePool(): {
     seedStorage?: unknown;
     headed?: boolean;
     initScript?: unknown;
+    emulate?: unknown;
   }[] = [];
   const headedIds = new Set<string>();
   const certSkipIds = new Set<string>();
@@ -93,7 +96,9 @@ function fakePool(): {
     ): Promise<Lease> {
       // The real pool takes `initScript`; this double only has to prove it arrived.
       const initScript = (opts as { initScript?: string }).initScript;
+      const emulate = (opts as { emulate?: unknown }).emulate;
       acquired.push({
+        ...(emulate === undefined ? {} : { emulate }),
         url,
         sessionId: opts.sessionId,
         seedStorage: opts.seedStorage,
@@ -125,6 +130,10 @@ function fakePool(): {
     activeCount: () => active,
     queuedCount: () => 0,
     leasedSessionIds: () => [...byOrigin.values()],
+    leaseUrl: (id: string) => {
+      for (const [origin, leased] of byOrigin) if (leased === id) return origin;
+      return undefined;
+    },
     leaseTtlMs: () => 300_000,
     // The real pool's rule: only the caller that took a lease is handed it again.
     leaseIdOnOrigin: (origin: string, owner: string | undefined) => {
@@ -274,6 +283,27 @@ describe('reticle_lease_acquire failure surfaces a clean message', () => {
       /could not open http:\/\/localhost:3000\/ — the page did not finish loading within 30 s \(navigation timed out\)\. If the app is running, .*retry the acquire\. If it is not running, start it first\./,
     );
     await expect(acquire).rejects.not.toThrow(/is the app running there/);
+  });
+});
+
+describe('reticle_lease_acquire at the pool cap (#1535)', () => {
+  it('asks the pool to refuse rather than queue, and passes its refusal through unchanged', async () => {
+    const seen: unknown[] = [];
+    const pool = {
+      acquire: (_url: string, opts: unknown) => {
+        seen.push(opts);
+        return Promise.reject(new PoolAtCapacityError(3));
+      },
+      leaseIdOnOrigin: () => undefined,
+      activeCount: () => 3,
+      queuedCount: () => 0,
+    } as unknown as BrowserPool;
+    await expect(
+      tool(ReticleTool.LEASE_ACQUIRE)({ ...baseDeps, pool }, { url: 'http://localhost:3000/' }),
+    ).rejects.toThrow(
+      'all 3 lease slots are in use. Release one (reticle_lease{action:"release"}, or stop a `reticle drive`), or raise RETICLE_MAX_CONTEXTS.',
+    );
+    expect(seen).toEqual([expect.objectContaining({ whenFull: 'refuse' })]);
   });
 });
 
@@ -774,6 +804,22 @@ describe('reticle_lease_release', () => {
     expect(result.leased).toBe(1);
   });
 
+  it('refuses an id that holds no lease, instead of answering released: true', async () => {
+    const { pool, released } = fakePool();
+    await tool(ReticleTool.LEASE_ACQUIRE)({ ...baseDeps, pool }, { url: 'http://localhost:3000/' });
+    await expect(
+      tool(ReticleTool.LEASE_RELEASE)({ ...baseDeps, pool }, { sessionId: 'lease-never' }),
+    ).rejects.toThrow(/no lease 'lease-never'.*nothing was released/i);
+    const refusal = await tool(ReticleTool.LEASE_RELEASE)(
+      { ...baseDeps, pool },
+      { sessionId: 'lease-never' },
+    ).catch((e: unknown) => (e instanceof Error ? e.message : ''));
+    // Our own refusal about the caller's argument, never "may be a defect in Reticle".
+    expect(recoveryFor(String(refusal))).toMatch(/did not match the tool's schema/);
+    expect(released).toEqual([]);
+    expect(pool.activeCount()).toBe(1);
+  });
+
   it('throws when no pool is available', async () => {
     await expect(
       tool(ReticleTool.LEASE_RELEASE)(baseDeps, { sessionId: 'lease-x' }),
@@ -807,7 +853,11 @@ describe('telling the human that the agent went somewhere invisible', () => {
         all: () => [watcher, leased],
         get: (id: string) => ('s-human' === id ? watcher : leased),
       },
-      pool: { ...pool, leasedSessionIds: () => leasedIds },
+      pool: {
+        ...pool,
+        leasedSessionIds: () => leasedIds,
+        leaseUrl: (id: string) => (leasedIds.includes(id) ? 'http://localhost:3000/' : undefined),
+      },
     } as unknown as ToolDeps;
     return { deps, narrations };
   }
@@ -1019,6 +1069,35 @@ describe('reticle_lease with an initScript stub', () => {
     expect(acquired).toHaveLength(1);
     expect(acquired[0]?.initScript).toBe(STUB);
     expect(String(out['hostStub'])).toMatch(/stub/i);
+  });
+
+  it('opens the lease with the media and the width it was asked for, before the first paint', async () => {
+    const { pool, acquired } = fakePool();
+    const deps = { ...baseDeps, pool } as unknown as ToolDeps;
+
+    await tool(ReticleTool.LEASE_ACQUIRE)(deps, {
+      url: 'http://localhost:3000/',
+      emulate: { reducedMotion: 'reduce', colorScheme: 'dark', width: 390 },
+    });
+
+    expect(acquired[0]?.emulate).toEqual({
+      reducedMotion: 'reduce',
+      colorScheme: 'dark',
+      viewport: { width: 390, height: 720 },
+    });
+  });
+
+  it('refuses an emulation value it does not know, rather than opening a lease without it', async () => {
+    const { pool, acquired } = fakePool();
+    const deps = { ...baseDeps, pool } as unknown as ToolDeps;
+
+    await expect(
+      tool(ReticleTool.LEASE_ACQUIRE)(deps, {
+        url: 'http://localhost:3000/',
+        emulate: { colorScheme: 'sepia' },
+      }),
+    ).rejects.toThrow(/colorScheme/);
+    expect(acquired).toHaveLength(0);
   });
 
   it('sends no initScript when none was asked for, so an untouched lease injects nothing', async () => {
@@ -1595,6 +1674,83 @@ describe('connectOrInject — the lease supplies an SDK only when the page never
   it('stays not-ready when there was no reader to give', async () => {
     const lease = { injectReader: () => Promise.resolve(false) };
     expect(await connectOrInject(lease, () => false, wait)).toEqual({
+      ready: false,
+      zeroInstall: false,
+    });
+  });
+
+  // #1555: a slow first dev compile holds the document past the fixed window, and the app's SDK
+  // dials in a moment later. A clock the waits advance stands in for the real 100 ms polls.
+  const clockedWait = (clock: { now: number }) => (isConnected: () => boolean) =>
+    waitForLeasedSession(
+      isConnected,
+      (ms) => {
+        clock.now += ms;
+        return Promise.resolve();
+      },
+      100,
+      100,
+    );
+
+  it('keeps waiting while the page is still loading, so an app that connects at 20.5 s is ready', async () => {
+    const clock = { now: 0 };
+    const connectsAt = 20_500;
+    const lease = {
+      injectReader: () => Promise.resolve(false),
+      isLoading: () => Promise.resolve(clock.now < connectsAt),
+    };
+    expect(await connectOrInject(lease, () => clock.now >= connectsAt, clockedWait(clock))).toEqual(
+      { ready: true, zeroInstall: false },
+    );
+  });
+
+  it('still waits after an injected reader when the page has not finished loading', async () => {
+    const clock = { now: 0 };
+    const connectsAt = 20_500;
+    const lease = {
+      injectReader: () => Promise.resolve(true),
+      isLoading: () => Promise.resolve(clock.now < connectsAt),
+    };
+    expect(await connectOrInject(lease, () => clock.now >= connectsAt, clockedWait(clock))).toEqual(
+      { ready: true, zeroInstall: true },
+    );
+  });
+
+  it('says the page is still loading instead of never dialled, and gives up within its bound', async () => {
+    const clock = { now: 0 };
+    const lease = {
+      injectReader: () => Promise.resolve(false),
+      isLoading: () => Promise.resolve(true),
+    };
+    expect(await connectOrInject(lease, () => false, clockedWait(clock), 3)).toEqual({
+      ready: false,
+      zeroInstall: false,
+      stillLoading: true,
+    });
+    // The first readiness wait plus three loading rounds, each ~10 s.
+    expect(clock.now).toBe(40_000);
+  });
+
+  it('does not wait longer for a page that finished loading', async () => {
+    const clock = { now: 0 };
+    const lease = {
+      injectReader: () => Promise.resolve(false),
+      isLoading: () => Promise.resolve(false),
+    };
+    expect(await connectOrInject(lease, () => false, clockedWait(clock))).toEqual({
+      ready: false,
+      zeroInstall: false,
+    });
+    expect(clock.now).toBe(10_000);
+  });
+
+  it('treats a page whose load state cannot be read as loaded', async () => {
+    const clock = { now: 0 };
+    const lease = {
+      injectReader: () => Promise.resolve(false),
+      isLoading: () => Promise.reject(new Error('page closed')),
+    };
+    expect(await connectOrInject(lease, () => false, clockedWait(clock))).toEqual({
       ready: false,
       zeroInstall: false,
     });

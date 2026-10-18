@@ -111,6 +111,11 @@ export interface PlanInput {
    * handing it an io would let any later step reach the disk from inside `buildPlan`.
    */
   cspSources?: Readonly<Record<string, string | undefined>> | undefined;
+  /**
+   * The project's `.prettierignore` content, pre-read so the prettier-ignore step stays pure.
+   * Null when the file does not exist — `init` creates it only when the project uses Prettier.
+   */
+  prettierIgnoreSource?: string | null | undefined;
   /** Whether the `claude` CLI is installed (so we can register the MCP server globally). */
   claudeCli: boolean;
   /** Whether an `reticle` MCP server is already registered with Claude (any scope) — idempotency. */
@@ -189,6 +194,11 @@ export interface PlanInput {
    * when there is no top-level layout and no single group renders `/` (#1538).
    */
   nextLayoutCandidates?: readonly string[] | undefined;
+  /**
+   * The other route-group root layouts when one was chosen to mount into, that do not mount
+   * `<ReticleDev />` themselves: the routes under them render without it.
+   */
+  nextUnmountedLayouts?: readonly string[] | undefined;
   /** Where the dev-only connect component goes — never inside `pages/`, which routes on presence. */
   nextReticleDevPath?: string | undefined;
   /** What the mount file should import — a sibling for App Router, `../components/…` for Pages. */
@@ -285,6 +295,11 @@ export interface PlanInput {
    * see reticleConfigStep for the port that survived every re-run because of it.
    */
   reticleConfigSource?: string | null | undefined;
+  /**
+   * `--new-id`: the app's source files that quote the id being replaced. A hand-written
+   * `connect({ projectId: '…' })` still naming it sends this checkout's evidence to the original.
+   */
+  copiedIdSources?: readonly { path: string; source: string }[] | undefined;
   /** Current project-root CLAUDE.md content (for the idempotent agent-rule merge), or null/undefined. */
   claudeMdContent?: string | null | undefined;
   /** Current project-root AGENTS.md content (the cross-agent rule), or null/undefined. */
@@ -333,6 +348,8 @@ export interface PlanInput {
     install: boolean;
     /** Stable project identity derived at init (package.json name + root). Baked into snippets/.reticle.json. */
     projectId?: string;
+    /** `--new-id`: the config on disk takes `projectId` above in place of the id it was copied with. */
+    newId?: boolean;
     /** The CLI's own version, pinned onto the SDK install so a stale registry cache cannot skew it. */
     sdkVersion?: string;
   };

@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { leaseNotConnectedHint } from './lease-hint.js';
+import { leaseNotConnectedHint, leaseStillLoadingHint } from './lease-hint.js';
 
 describe('the lease hint is ranked by evidence, not by a static differential', () => {
   it('leads with a recorded refusal, which is the only certain cause there is', () => {
@@ -100,5 +100,15 @@ describe('a project that has connected before is not proof THIS app is wired', (
   /** The port evidence is still real and must survive: that half of the inference is sound. */
   it('still says the port itself is proven', () => {
     expect(hint).toMatch(/port/);
+  });
+});
+
+describe('leaseStillLoadingHint', () => {
+  it('says how long the page was still loading and does not blame the install', () => {
+    const hint = leaseStillLoadingHint('http://localhost:4200/', 40_200);
+    expect(hint).toContain('http://localhost:4200/ was still loading after 40s');
+    expect(hint).toContain('Its SDK did not have time to connect.');
+    expect(hint).toContain('reticle_session { action: "list" }');
+    expect(hint).not.toMatch(/never dialled|init|reticle_sessions/);
   });
 });

@@ -42,6 +42,7 @@ the first flow. It never drives: the Harness is opt-in and unlocks at 80% instru
   --env KEY=VALUE    what the app needs to reach a usable state (repeatable)
   --files-only       write the files and stop; do not boot the app
   --no-install       do not install packages
+  --new-id           give this checkout its own project id (a copied repo keeps the original's)
   --no-mcp           skip the MCP registration, the agent rule files and the /reticle command
   --hooks            also install the agent hooks
   --no-prompt-capture  install no hook that saves each prompt to .reticle/
@@ -64,7 +65,8 @@ const VERIFY_DETAIL = `Drives the URL and verifies the saved flows. Exit 0 means
   --session-id <id>, --timeout N, --headed, --port N
   --expect '<json predicate>' | --expect-file <path>
                                 one verdict, no saved flows needed. Asks a running daemon,
-                                never starts one. Exit 0 only on verified:"yes". For an
+                                never starts one, and waits up to --timeout ms (default 4000)
+                                for it to come true. Exit 0 only on verified:"yes". For an
                                 action --expect cannot do, use the HTTP MCP transport:
                                 https://docs.reticle.sh/http-transport.md`;
 
@@ -130,9 +132,10 @@ const COMMANDS: readonly CommandDoc[] = [
   },
   {
     name: 'open',
-    synopsis: 'open [url] [--port N]',
+    synopsis: 'open [url] [--port N] [--navigate]',
     summary: 'Open the app in your browser, or reuse a tab that is already connected',
     group: HelpGroup.MACHINE,
+    detail: '--navigate moves a tab already on that origin to the url instead of leaving it.',
   },
   {
     name: 'stop',

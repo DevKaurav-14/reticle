@@ -17,7 +17,7 @@ import { SHARED_PARAM_SHORT } from './shared-params.js';
 import { buildDynamicTools } from '@/surface/tools/dynamic-tools.js';
 import { runTool } from '@/surface/tools/invoke-tool.js';
 import { sessionEnvelopeShape, newSnapshotCache, type ToolCall } from '@/surface/tools/tool-kit.js';
-import { buildErrorPayload } from '@/surface/tools/error-recovery.js';
+import { buildErrorPayload, codedRefusalOf } from '@/surface/tools/error-recovery.js';
 import { takeVersionSkewOnto } from '@/command/version/version-nudge.js';
 import { resultIsError } from './faults/mcp-is-error.js';
 import { consumerVerdictRefusal, reservedVerdictKeysIn } from './consumer-verdict-guard.js';
@@ -142,7 +142,7 @@ const PREDICATE_KINDS =
  */
 const PREDICATE_FIELD_GRAMMAR_HINT =
   ' Bug-catching options: net.count (exact request count — catches double-submit), ' +
-  'net.bodyMatches (a JSON field match on what the SERVER answered — say the FIELD (a dotted path reaches nested ones) and its value, ' +
+  'net.bodyMatches (a JSON field match on what the SERVER answered, keyed by the field: { status: "completed" }, never { field, value }; a dotted key reaches a nested field; ' +
   'because a substring of the body matches key names too), net.requestBodyMatches (the same on what ' +
   'the UI SENT — the verdict for "applying this filter actually puts it in the payload"), ' +
   'compare (page text vs server answer, no expected value: { left:{from:"text",scope}, ' +
@@ -835,7 +835,10 @@ export function createMcpServer(
               type: 'text' as const,
               text: JSON.stringify(
                 liveCallValues(
-                  takeVersionSkewOnto(buildErrorPayload(message), deps.peerSkew),
+                  takeVersionSkewOnto(
+                    buildErrorPayload(message, codedRefusalOf(error)),
+                    deps.peerSkew,
+                  ),
                   advertisedNames,
                 ),
               ),

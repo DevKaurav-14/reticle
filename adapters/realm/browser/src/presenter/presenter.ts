@@ -291,7 +291,7 @@ export class Presenter {
           snapshot.harnessConfig,
           harnessGateIn(snapshot.instrumentation, snapshot.harnessConfig),
         );
-        this.#shell.paintHarnessDrive(snapshot.harnessDrive);
+        this.#shell.paintHarnessDrive(snapshot.harnessDrive, snapshot.lastDrive);
         this.#paintHarnessRun(snapshot.harnessDrive);
         this.#shell.paintAgent(snapshot.agent);
         this.#shell.paintImpact(snapshot.project.counts.verdicts);
@@ -332,7 +332,7 @@ export class Presenter {
     // A sibling BELOW the strip, hidden except while reading or acting, would pop a block into the
     // panel and take it away again on every tool call — which reads as a second UI flashing in rather
     // than as the one status line changing what it says.
-    const actStrip = `<div class="reticle-act-strip" data-liveness="idle"><span class="reticle-act-dot" aria-hidden="true"></span><span class="reticle-act">${ACT_STRIP.READY}</span>${CONTROLS_BANNER_HTML}<span class="reticle-chip" data-reticle-chip></span><div class="reticle-act-actions">${CONTROLS_STATUS_HTML}</div></div>`;
+    const actStrip = `<div class="reticle-act-strip" data-liveness="idle"><span class="reticle-act-dot" aria-hidden="true"></span><span class="reticle-act" data-reticle-act-line>${ACT_STRIP.READY}</span>${CONTROLS_BANNER_HTML}<span class="reticle-chip" data-reticle-chip></span><div class="reticle-act-actions">${CONTROLS_STATUS_HTML}</div></div>`;
     root.innerHTML = `
       ${blockerHtml()}
       <div data-reticle-glow></div>
@@ -615,10 +615,15 @@ export class Presenter {
    * header says so on every page, whatever page the person is reading.
    */
   #paintHarnessRun(drive: HarnessDrive | undefined): void {
+    const log = this.#harnessLog;
     if (drive !== undefined && drive.runId !== this.#harnessRunId) {
       this.#harnessRunId = drive.runId;
-      if (this.#harnessLog !== undefined) clearLogRows(this.#harnessLog);
+      if (log !== undefined) clearLogRows(log);
     }
+    // The daemon keeps the drive's lines: a page reopened or reloaded mid-run shows them again.
+    if (log !== undefined && 0 === log.childElementCount)
+      for (const line of drive?.lines ?? [])
+        appendLogRow(log, LOG_KIND.NARRATION, line, '', this.#logMax, LOG_ACTOR.HARNESS);
     const was = this.#harnessSteps;
     this.#harnessSteps = drive?.steps;
     if (drive !== undefined) this.#paintActStrip(this.#lastActionText, false);

@@ -82,7 +82,7 @@ reticle_run({ tool: "reticle_flow_save", args: { flowName: "create-task" } })   
 }
 ```
 
-Each step binds to a **semantic anchor**, never a `eXX` ref: a `testid`/`signal` when available, else an auto-derived `component` anchor (component name + source `file:line`) for an element with no testid, so the flow stays stable with zero hand-added testids. Only when none of those resolve is a step kept `degraded: true` (a last-resort "add a testid here" marker) rather than silently dropped.
+Each step binds to a **semantic anchor**, never a `eXX` ref: a `testid`/`signal` when available, else an auto-derived `component` anchor (component name + source `file:line`) for an element with no testid, so the flow stays stable with zero hand-added testids. A press of a document key (Escape, Tab, a shortcut) with no target is aimed at no element, so it is saved with a `{ "kind": "role", "role": "document" }` anchor and replayed at the document, as it ran. Only when none of those resolve is a step kept `degraded: true` (a last-resort "add a testid here" marker) rather than silently dropped.
 
 ## Run a flow
 
@@ -106,6 +106,7 @@ There is no state to restore, so the steps before `from` run again quickly as se
 Every session's driving is saved as a flow at teardown when it declared a consequence. These flows:
 
 - are named from the `intent` you pass to `reticle_act_and_wait` (`drive-close-an-issue`), and carry it as the flow's `intent`;
+- without an `intent`, carry a sentence built from what the steps expect, in order ("A POST request to /api/login is made, then the page moves to /home"), as `intent` with `intentDerived: true`, and are named from it (`drive-a-post-request-to-api-login-is-made-login`). A built sentence never enters the intent ledger, and the flow still reports that it declares no intent. Flows saved before this keep their names;
 - merge: another drive that starts on the same page and takes the same steps updates the existing file instead of adding a copy. The existing flow keeps its name and everything it already says; the new drive only fills gaps. Flows you named yourself are never merged;
 - record, on every step, the `page` it ran on and the `endPage` it led to;
 - declare `requires` (the start page) and `ensures` (the end page) as route claims, so `canFollow` can tell which flows chain. Replay treats a required start page as met by navigating there;

@@ -23,6 +23,15 @@ describe('the platform credits on the wire', () => {
         .success,
     ).toBe(false);
   });
+
+  it('reads a part credit, which the platform charges, instead of dropping the whole HUD push', () => {
+    const base = { provider: 'jev', harnessEnabled: true, harnessEntitled: true };
+    const credits = { used: 52.25, limit: 380, kind: 'trial', daysLeft: 13 };
+    expect(HarnessConfigSchema.parse({ ...base, credits }).credits).toEqual(credits);
+    expect(creditsLeftText({ used: 52.25, limit: 380, kind: CreditKind.TRIAL })).toBe(
+      '327.75 of 380 trial credits',
+    );
+  });
 });
 
 describe('credits left, said by the grant they came from', () => {
@@ -85,7 +94,7 @@ describe('creditsUsageText', () => {
 
   it('signed out, pitches the free credits and the trial in one line', () => {
     expect(SIGN_UP_PITCH).toBe(
-      'Sign up: 10 free credits to try Reticle Harness · add a card for a 500-credit, 14-day trial',
+      'Sign up: free credits to try Reticle · add a card for a 500-credit, 14-day trial',
     );
   });
 });

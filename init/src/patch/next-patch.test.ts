@@ -4,6 +4,7 @@ import {
   patchNextConfig,
   patchRootLayout,
   patchPagesApp,
+  nextUsesTypeScript,
   reticleDevLocation,
 } from './next-patch.js';
 import { PatchKind } from './patch-kind.js';
@@ -213,6 +214,32 @@ export default function App({ Component, pageProps }: AppProps) {
  * takes its require-hook down with it and the dev server never starts at all. Both were shipped by
  * one line choosing a hardcoded path.
  */
+/**
+ * Next decides "TypeScript project" from a `tsconfig.json` or a TypeScript source file, never from a
+ * `typescript` dependency (#1527). Reading the dependency wrote `.tsx` into a jsconfig app, and Next
+ * then generated a `tsconfig.json` that made it ignore the jsconfig's `@/` paths.
+ */
+describe('nextUsesTypeScript', () => {
+  it('a tsconfig.json makes it TypeScript, whatever the mount file is', () => {
+    expect(nextUsesTypeScript('app/layout.js', true)).toBe(true);
+    expect(nextUsesTypeScript(null, true)).toBe(true);
+  });
+
+  it('a .ts or .tsx mount file makes it TypeScript', () => {
+    expect(nextUsesTypeScript('app/layout.tsx', false)).toBe(true);
+    expect(nextUsesTypeScript('src/pages/_app.ts', false)).toBe(true);
+  });
+
+  it('a .js or .jsx mount file with no tsconfig is JavaScript', () => {
+    expect(nextUsesTypeScript('app/layout.js', false)).toBe(false);
+    expect(nextUsesTypeScript('pages/_app.jsx', false)).toBe(false);
+  });
+
+  it('no mount file and no tsconfig is JavaScript', () => {
+    expect(nextUsesTypeScript(null, false)).toBe(false);
+  });
+});
+
 describe('reticleDevLocation', () => {
   it('keeps the component OUT of the pages route directory', () => {
     const loc = reticleDevLocation('pages/_app.js', false);
@@ -274,7 +301,10 @@ describe('findRouteGroupRootLayout', () => {
       'app/(site)/page.tsx': '',
       'app/(site)/about/page.tsx': '',
     });
-    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'app/(site)/layout.tsx' });
+    expect(findRouteGroupRootLayout(io)).toEqual({
+      path: 'app/(site)/layout.tsx',
+      unmounted: [],
+    });
   });
 
   it('takes the group that renders / among several', () => {
@@ -284,7 +314,10 @@ describe('findRouteGroupRootLayout', () => {
       'app/(marketing)/layout.jsx': LAYOUT,
       'app/(marketing)/page.jsx': '',
     });
-    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'app/(marketing)/layout.jsx' });
+    expect(findRouteGroupRootLayout(io)).toEqual({
+      path: 'app/(marketing)/layout.jsx',
+      unmounted: ['app/(dashboard)/layout.tsx'],
+    });
   });
 
   it('counts a / page inside a route group nested under the layout', () => {
@@ -294,7 +327,10 @@ describe('findRouteGroupRootLayout', () => {
       'app/(site)/layout.tsx': LAYOUT,
       'app/(site)/(home)/page.tsx': '',
     });
-    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'app/(site)/layout.tsx' });
+    expect(findRouteGroupRootLayout(io)).toEqual({
+      path: 'app/(site)/layout.tsx',
+      unmounted: ['app/(app)/layout.tsx'],
+    });
   });
 
   it('prefers a group layout that already mounts ReticleDev', () => {
@@ -304,7 +340,20 @@ describe('findRouteGroupRootLayout', () => {
       'app/(site)/layout.tsx': LAYOUT,
       'app/(site)/page.tsx': '',
     });
-    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'app/(app)/layout.tsx' });
+    expect(findRouteGroupRootLayout(io)).toEqual({
+      path: 'app/(app)/layout.tsx',
+      unmounted: ['app/(site)/layout.tsx'],
+    });
+  });
+
+  it('does not list a group layout that mounts ReticleDev itself', () => {
+    const io = project({
+      'app/(app)/layout.tsx': WIRED,
+      'app/(app)/settings/page.tsx': '',
+      'app/(site)/layout.tsx': WIRED,
+      'app/(site)/page.tsx': '',
+    });
+    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'app/(app)/layout.tsx', unmounted: [] });
   });
 
   it('names the candidates when no single group renders /', () => {
@@ -321,7 +370,10 @@ describe('findRouteGroupRootLayout', () => {
 
   it('looks in src/app for a --src-dir app', () => {
     const io = project({ 'src/app/(site)/layout.js': LAYOUT, 'src/app/(site)/page.js': '' });
-    expect(findRouteGroupRootLayout(io)).toEqual({ path: 'src/app/(site)/layout.js' });
+    expect(findRouteGroupRootLayout(io)).toEqual({
+      path: 'src/app/(site)/layout.js',
+      unmounted: [],
+    });
   });
 
   it('answers null when there is no route-group layout, so pages/_app is still asked', () => {

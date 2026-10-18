@@ -1,5 +1,6 @@
 /**
- * Harness credits, as the platform grants them and as every surface says them.
+ * Credits, as the platform grants them and as every surface says them. They pay for the whole
+ * platform, not only the Harness, so every surface calls them credits.
  *
  * One file because the HUD's row and the daemon's refusal must say the same sentence: when the two
  * were written apart, the HUD offered "a free monthly allowance" the platform no longer grants.
@@ -12,19 +13,21 @@ import { CreditKind } from './impact.js';
 
 /** The trial a card starts. Not on the wire; the platform's own sentence names it the same. */
 export const TRIAL_DAYS = 14;
-/** What a new account is granted, and what a card's trial grants. The platform's numbers, said. */
-export const FREE_CREDITS = 10;
+/**
+ * What a card's trial grants. No sign-up number: free credit is granted once per person, so the
+ * engine cannot know whether the reader still has any. Only the platform's `limit` says a count.
+ */
 export const TRIAL_CREDITS = 500;
 
 /** What a signed-out HUD says the Harness costs to try. */
 export const SIGN_UP_PITCH =
-  `Sign up: ${String(FREE_CREDITS)} free credits to try Reticle Harness · ` +
+  'Sign up: free credits to try Reticle · ' +
   `add a card for a ${String(TRIAL_CREDITS)}-credit, ${String(TRIAL_DAYS)}-day trial`;
 
 /** The platform's offer, worded once: what a card starts, and what an account gets without one. */
 export const TRIAL_OFFER =
-  `a card starts a ${String(TRIAL_DAYS)}-day trial with ${String(TRIAL_CREDITS)} Harness credits; ` +
-  `without one, ${String(FREE_CREDITS)} sign-up credits`;
+  `a card starts a ${String(TRIAL_DAYS)}-day trial with ${String(TRIAL_CREDITS)} credits; ` +
+  'without one, free sign-up credits';
 
 export interface Credits {
   used: number;

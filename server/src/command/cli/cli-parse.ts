@@ -201,6 +201,8 @@ const NO_PROMPT_CAPTURE_FLAG = '--no-prompt-capture';
 const JSON_FLAG = '--json';
 const NO_DRIVE_FLAG = '--no-drive';
 const NO_OPEN_FLAG = '--no-open';
+/** `reticle open <url> --navigate`: move a tab already on the origin to the url (#1140). */
+const NAVIGATE_FLAG = '--navigate';
 /** Connect and stop: no coverage summary and no prompt at the end. */
 const NO_FIRST_RUN_FLAG = '--no-first-run';
 const NO_AGENTS_FLAG = '--no-agents';
@@ -225,6 +227,8 @@ const DRIVE_MODEL_FLAG = '--drive-model';
  */
 const LICENSE_FLAG = '--license';
 const NO_INSTALL_FLAG = '--no-install';
+/** Give this checkout a project id of its own: a copied repository keeps the original's. */
+const NEW_ID_FLAG = '--new-id';
 export const HTTP_FLAG = '--http';
 export const HTTP_PORT_FLAG = '--http-port';
 export const HTTP_TOKEN_FLAG = '--http-token';
@@ -258,6 +262,7 @@ export type CliResult =
       url: string | undefined;
       timeoutSeconds: number | undefined;
       licenseKey: string | undefined;
+      newId: boolean;
     }
   | {
       kind: 'serve';
@@ -281,7 +286,7 @@ export type CliResult =
   | { kind: 'doctor'; port: number }
   | { kind: 'setup-mcp' }
   | { kind: 'setup-install'; runtimeSecs: number; installSecs: number; mcp: boolean }
-  | { kind: 'open'; port: number; url?: string }
+  | { kind: 'open'; port: number; url?: string; navigate: boolean }
   | {
       kind: '_daemon';
       port: number;
@@ -478,6 +483,7 @@ type InitFlags =
       url: string | undefined;
       timeoutSeconds: number | undefined;
       licenseKey: string | undefined;
+      newId: boolean;
     }
   | { kind: 'error'; message: string };
 
@@ -502,6 +508,7 @@ function parseInitFlags(args: string[]): InitFlags {
   let url: string | undefined;
   let timeoutSeconds: number | undefined;
   let licenseKey: string | undefined;
+  let newId = false;
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
@@ -568,6 +575,8 @@ function parseInitFlags(args: string[]): InitFlags {
       mcp = false;
     } else if (arg === NO_INSTALL_FLAG) {
       install = false;
+    } else if (arg === NEW_ID_FLAG) {
+      newId = true;
     } else if (arg === DRY_RUN_FLAG) {
       dryRun = true;
     } else if (arg === YES_FLAG) {
@@ -599,6 +608,7 @@ function parseInitFlags(args: string[]): InitFlags {
     url,
     timeoutSeconds,
     licenseKey,
+    newId,
   };
 }
 
@@ -717,6 +727,7 @@ export function parseCliArgs(
         url: r.url,
         timeoutSeconds: r.timeoutSeconds,
         licenseKey: r.licenseKey,
+        newId: r.newId,
       };
     }
     case SERVE_COMMAND: {
@@ -813,7 +824,10 @@ export function parseCliArgs(
       const port = parsePortFlag(rest, defaultPort);
       // The first non-flag arg is the url (optional — omitting reuses a connected tab).
       const url = rest.find((a) => !a.startsWith('--') && a !== String(port));
-      return url !== undefined ? { kind: 'open', port, url } : { kind: 'open', port };
+      const navigate = rest.includes(NAVIGATE_FLAG);
+      return url !== undefined
+        ? { kind: 'open', port, url, navigate }
+        : { kind: 'open', port, navigate };
     }
     case DRIVE_COMMAND: {
       const r = parseDriveSuffix(rest, defaultPort, defaultHeadless);

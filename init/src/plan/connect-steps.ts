@@ -21,6 +21,7 @@ export const StepTitle = {
   RETICLE_DEV_COMPONENT: 'ReticleDev component',
   NEXT_CONFIG: 'Next config (withReticle)',
   MOUNT_RETICLE_DEV: 'Mount ReticleDev',
+  ROUTE_GROUPS_WITHOUT_RETICLE_DEV: 'Route groups without ReticleDev',
   CONNECT_MODULE: 'Reticle connect module',
   PAIRING_TOKEN: 'Pairing token',
   PAIRING_TOKEN_PER_MACHINE: 'Pairing token is per-machine',

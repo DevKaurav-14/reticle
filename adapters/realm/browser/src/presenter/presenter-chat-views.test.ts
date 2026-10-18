@@ -46,7 +46,7 @@ describe('chat views and harness access states', () => {
     views.paintAccount({ signedIn: false });
     expect(rows(root)).toBe(1);
     expect(root.textContent).toContain(
-      'Sign up: 10 free credits to try Reticle Harness · add a card for a 500-credit, 14-day trial',
+      'Sign up: free credits to try Reticle · add a card for a 500-credit, 14-day trial',
     );
     expect(root.querySelector('[data-reticle-account-signin]')).not.toBeNull();
   });
@@ -129,6 +129,32 @@ describe('chat views and harness access states', () => {
     // The daemon's next push carries the platform's config: linked, and the button is gone.
     views.paintHarness(entitled);
     expect(button()).toBeNull();
+  });
+
+  /*
+   * Found live: a tab that named no project pressed Link, the daemon refused, and the button said
+   * "Linking…", disabled, until the page was reloaded.
+   */
+  it('gives the Link button back when no link lands, so the person can try again', () => {
+    vi.useFakeTimers();
+    try {
+      const { root, views, drive } = mountViews();
+      views.paintAccount({ signedIn: true });
+      views.paintHarness(undefined);
+      const button = (): HTMLButtonElement | null =>
+        root.querySelector<HTMLButtonElement>('[data-reticle-harness-link]');
+      button()?.click();
+      expect(button()?.disabled).toBe(true);
+      // The daemon answered, and the project is still not linked.
+      views.paintHarness(undefined);
+      vi.advanceTimersByTime(20_000);
+      expect(button()?.textContent).toBe('Link this project');
+      expect(button()?.disabled).toBe(false);
+      button()?.click();
+      expect(drive.link).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows the Harness value and setup link to signed-in users without entitlement', () => {
@@ -227,7 +253,7 @@ describe('chat views and harness access states', () => {
     const { root, views } = mountViews();
     views.paintAccount({ signedIn: true });
     views.paintHarness({ ...entitled, credits: { used: 500, limit: 500 } });
-    expect(root.textContent).toContain('No Harness credits left');
+    expect(root.textContent).toContain('No credits left');
     expect(root.querySelector('.reticle-harness-link')?.textContent).toContain('Get more');
     expect(root.querySelector('[data-reticle-harness-page-meta]')?.textContent).toBe('');
   });
@@ -324,6 +350,29 @@ describe('chat views and harness access states', () => {
     });
     expect(root.querySelector('.reticle-harness-link')?.getAttribute('href')).toBe(
       'https://reticle.internal.test/settings?group=billing',
+    );
+  });
+
+  /*
+   * Found live: the API and the console are two origins, so "Add a card…" built from the API's
+   * origin opened a 404. The platform sends the console's own page as `planUrl`; the HUD uses it,
+   * and Set up goes to the same origin.
+   */
+  it("links plans and set-up to the console the platform names, not the API's origin", () => {
+    const { root, views } = mountViews();
+    views.paintAccount({ signedIn: true, host: 'http://localhost:8890' });
+    const split = {
+      ...entitled,
+      platformUrl: 'http://localhost:8890',
+      planUrl: 'http://localhost:4320/settings?group=billing',
+    };
+    views.paintHarness({ ...split, credits: { used: 10, limit: 10, kind: 'free' } });
+    expect(root.querySelector('.reticle-harness-link')?.getAttribute('href')).toBe(
+      'http://localhost:4320/settings?group=billing',
+    );
+    views.paintHarness({ ...split, providerReady: false });
+    expect(root.querySelector('.reticle-harness-link')?.getAttribute('href')).toBe(
+      'http://localhost:4320/settings?group=project#model',
     );
   });
 
@@ -536,6 +585,30 @@ describe('running the Harness from the panel', () => {
     expect(run?.textContent).toBe('Run Harness');
     expect(run?.hasAttribute('data-reticle-harness-run')).toBe(true);
     expect(run?.disabled).toBe(false);
+  });
+
+  // Night 7b: with the cloud unreachable the daemon answered in 0.15 s, and the page sat on
+  // Starting… for the whole 20 s fallback before it showed the line.
+  it("shows why no drive started as soon as the daemon says it, not after Starting…'s fallback", () => {
+    const { root, views } = mountWithDrive();
+    // An earlier word on this tab: it is not the answer to this press.
+    views.paintDrive(undefined, {
+      said: 'The page reloaded, so this run stopped. Run again.',
+      seq: 1,
+    });
+    const run = root.querySelector<HTMLButtonElement>('[data-reticle-harness-run]');
+    run?.click();
+    views.paintDrive(undefined, {
+      said: 'The page reloaded, so this run stopped. Run again.',
+      seq: 1,
+    });
+    expect(run?.textContent).toBe('Starting…');
+    views.paintDrive(undefined, { said: 'Reticle Cloud at http://x did not answer.', seq: 2 });
+    expect(run?.textContent).toBe('Run Harness');
+    expect(run?.disabled).toBe(false);
+    expect(root.querySelector('[data-reticle-harness-page]')?.textContent).toContain(
+      'Reticle Cloud at http://x did not answer.',
+    );
   });
 
   it('gives Run back if the drive never starts', () => {

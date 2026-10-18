@@ -12,6 +12,7 @@ import { claimedArtifactRoot } from './memory/project/root-claims.js';
 import { servingDirectoryOf } from './portal/session/serving-directory.js';
 import { originOf } from './portal/session/session-manager.js';
 import { Bridge } from './portal/bridge/bridge.js';
+import type { Session } from './portal/session/session.js';
 import { FlowStore } from './language/flows/flows.js';
 import type { FlowFile } from '@reticlehq/core';
 import type { FileSystemPort } from './memory/project/fs/fs-port.js';
@@ -66,7 +67,7 @@ export function attachJournal(
   const resolveArtifactRoot = artifactRootResolver(deps.reticleRoot, {
     servingDirectory: servingDirectoryOf,
   });
-  bridge.attachSessionCreate((session) => {
+  const stampProject = (session: Session): void => {
     // Stamp the project's own `.reticle` before ANY counter fires for this session. Without it every
     // verdict is recorded against wherever the daemon was started, which is how one app's evidence
     // reached a different account's production dashboard.
@@ -86,6 +87,9 @@ export function attachJournal(
     // deleted it, while the journals this ignore protects landed in another tree, uncovered.
     if (deps.enabled) void ensureWorkspaceGitignore(deps.fs, session.artifactRoot);
     journalAttach(session);
+  };
+  bridge.attachSessionCreate((session) => {
+    stampProject(session);
     // Seed the learned ambient map so a fresh session starts knowing which regions churn, instead of
     // re-learning from zero. Best-effort + async: a late seed still helps, a failure is silent.
     if (deps.enabled) {
@@ -95,6 +99,9 @@ export function attachJournal(
         .catch(() => undefined);
     }
   });
+  // A page that connected without a project and names one later (an app's own connect() ran before
+  // the build plugin's) is stamped again, so its evidence leaves the unmatched bucket from now on.
+  bridge.attachProjectAdopted(stampProject);
   // Teardown: flush the journal tail to disk + persist what this session learned.
   const teardown = makeSessionEnd({
     ...deps,

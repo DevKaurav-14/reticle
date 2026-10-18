@@ -23,7 +23,7 @@ import {
 } from './cli-verify.js';
 import { PortPresence } from '../daemon/binding/port-presence.js';
 import { renderHelp } from './cli-usage.js';
-import { verifyResults } from './verify-results.js';
+import { verifyResults, type VerifyResults } from './verify-results.js';
 
 const NOW = 1_700_000_000_000;
 
@@ -123,13 +123,24 @@ describe('runVerify', () => {
     expect(rec.closed).toBe(1);
   });
 
+  // The live exit is process.exit, and close() is where the last cloud sync cycle sends the run's
+  // flows and screenshots: exiting first meant a run with no daemon reached the dashboard bare.
+  it('closes the connection before it exits, on a pass and on an early refusal', async () => {
+    const pass = harness({ verify: () => Promise.resolve(makeRun(RunFlowStatus.PASS)) });
+    const closedAtExit: number[] = [];
+    await runVerify(ARGS, { ...pass.ports, exit: () => closedAtExit.push(pass.rec.closed) });
+    const refused = harness({ sessionReady: () => Promise.resolve(false) });
+    await runVerify(ARGS, { ...refused.ports, exit: () => closedAtExit.push(refused.rec.closed) });
+    expect(closedAtExit).toEqual([1, 1]);
+  });
+
   // Persona drive: an unlinked verify printed pass and a runId, and nothing said nothing was sent.
   it('says an unlinked run was kept on this computer and how to send runs', async () => {
     const { ports, rec } = harness({ verify: () => Promise.resolve(makeRun(RunFlowStatus.PASS)) });
     await runVerify(ARGS, ports);
     const said = rec.out.join('\n');
     expect(said).toContain('run-test was kept on this computer');
-    expect(said).toContain('npx @reticlehq/server connect');
+    expect(said).toContain('reticle connect');
   });
 
   it('exits 1 when nothing ran, so CI cannot go green on an empty run', async () => {
@@ -444,6 +455,35 @@ describe('runVerify --results-json', () => {
       verdict: 'no',
       results: [{ journey: 'checkout', verdict: 'no', reason: 'order never saved' }],
     });
+  });
+
+  /*
+   * A CI check on the dashboard could never offer the replay of the run behind a journey: the
+   * results named no run. The id goes in only when the run reached the platform, so it resolves.
+   */
+  it('names the run each journey came from once the run reached the platform, and not before', async () => {
+    let status = 200;
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status })));
+    const written: string[] = [];
+    const run = makeRun(RunFlowStatus.FAIL);
+    const { ports } = harness({ verify: () => Promise.resolve(run) });
+    const linked = {
+      ...ports,
+      cloud: () => Promise.resolve({ url: 'https://cloud.test', apiKey: 'rk_test' }),
+      writeResults: (_path: string, text: string) => {
+        written.push(text);
+        return Promise.resolve();
+      },
+    };
+    await runVerify({ ...ARGS, resultsJson: 'out.json' }, linked);
+    status = 401;
+    await runVerify({ ...ARGS, resultsJson: 'out.json' }, linked);
+    vi.unstubAllGlobals();
+    const [pushed, refused] = written.map((t) => JSON.parse(t) as VerifyResults);
+    expect(pushed?.results).toEqual([
+      { journey: 'checkout', verdict: 'no', reason: 'order never saved', runId: run.runId },
+    ]);
+    expect(refused?.results[0]).not.toHaveProperty('runId');
   });
 
   it('reads a skipped journey as unknown, and the run as unknown rather than yes', () => {

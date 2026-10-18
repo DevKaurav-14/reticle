@@ -253,12 +253,17 @@ export function driveRunFrom(
   const intentOf = new Map(actions.map((a) => [a.actionId, asString(asRecord(a.args)['intent'])]));
   const checks: RunCheck[] = [];
   for (const verdict of found) {
-    const intent = intentOf.get(verdict.actionId);
+    // The agent's own words on the call win; else the sentence the verdict recorded.
+    const given = intentOf.get(verdict.actionId);
+    const own = given !== undefined && 0 < given.length;
+    const intent = own ? given : verdict.intent;
     checks.push({
       predicate: verdict.claim,
       status: verdict.verified,
       actionId: verdict.actionId,
       ...(intent === undefined || 0 === intent.length ? {} : { intent }),
+      ...(!own && true === verdict.intentDerived ? { intentDerived: true } : {}),
+      ...(verdict.failedPart === undefined ? {} : { failedPart: verdict.failedPart }),
       // Where it was written, and on a miss the calls of its window: what an issue page shows.
       ...(verdict.source === undefined && verdict.net === undefined
         ? {}

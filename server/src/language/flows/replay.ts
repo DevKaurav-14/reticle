@@ -1,14 +1,25 @@
 import {
-  REDACTED_FILL,
+  SECRET_FIELD_ARG,
   SECRET_NAME_ARG,
-  secretEnvKey,
+  secretKeyForFill,
   secretValue,
 } from './fields/flow-secret-field.js';
-import { FlowPredicateSchema, Verified, type Predicate } from '@reticlehq/core';
+import {
+  EventType,
+  FlowPredicateSchema,
+  MUTATING_METHODS,
+  Verified,
+  isDevToolingUrl,
+  pathOf,
+  type Predicate,
+  type ReticleEvent,
+} from '@reticlehq/core';
 import {
   DANGEROUS_ACTION_CONFIRM_ARG,
+  DOCUMENT_ANCHOR_ROLE,
   ReticleCommand,
   QueryBy,
+  isGlobalPressCall,
   type CommandResult,
 } from '@reticlehq/core';
 import { ReticleTool, invokedFlowMissing } from '@reticlehq/core';
@@ -63,10 +74,12 @@ export function replayActionArgs(
 ): Record<string, unknown> {
   const args = { ...asRecord(value) };
   delete args[DANGEROUS_ACTION_CONFIRM_ARG];
+  const key = field === undefined ? undefined : secretKeyForFill(args, field);
   delete args[SECRET_NAME_ARG];
+  delete args[SECRET_FIELD_ARG];
   if (confirmDangerous) args[DANGEROUS_ACTION_CONFIRM_ARG] = true;
-  if (REDACTED_FILL === args['value'] && field !== undefined) {
-    const supplied = secretValue(secretEnvKey(field), process.env);
+  if (key !== undefined) {
+    const supplied = secretValue(key, process.env);
     if (supplied !== undefined && supplied.length > 0) args['value'] = supplied;
   }
   return args;
@@ -98,12 +111,29 @@ function sourceFromResult(res: Record<string, unknown>): Record<string, unknown>
  * Pathname rather than the whole url, because that is what `startPath` is compared against and what
  * a hash-routed app makes meaningless in the document location — see routeOfEvent.
  */
-export function pathOf(url: string | undefined): string | undefined {
-  if (url === undefined) return undefined;
+export { pathOf };
+
+/**
+ * Did the app send a write request in this window? A step that did is saved `writes: true`, so a
+ * replay does not repeat it unasked. The dev server's own traffic is not the app's.
+ */
+export function wroteIn(events: readonly ReticleEvent[]): boolean {
+  return events.some((event) => {
+    if (EventType.NET_REQUEST !== event.type) return false;
+    const method = asString(event.data['method'])?.toUpperCase() ?? '';
+    return MUTATING_METHODS.includes(method) && !isDevToolingUrl(asString(event.data['url']));
+  });
+}
+
+/** `wroteIn` over a session's window, best-effort: the record must never fail the drive it records. */
+export function wroteSince(
+  session: { eventsSince(since: number): readonly ReticleEvent[] },
+  since: number,
+): boolean {
   try {
-    return new URL(url).pathname;
+    return wroteIn(session.eventsSince(since));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
@@ -130,6 +160,8 @@ export function captureAct(
   route?: string,
   /** The session that acted: only recordings it started take the step. */
   session?: string,
+  /** The act's window sent a write request; see `wroteIn`. */
+  wrote = false,
 ): void {
   // NO `active()` gate. `RecordingStore.capture` opens the AMBIENT tape on its first step, and that
   // branch was unreachable from here: this returned early whenever nothing was open, and the only
@@ -140,6 +172,9 @@ export function captureAct(
   // That is the whole supply of regression tests this product could have had for free: few saved
   // flows are mutation-testable and few steps declare a consequence, and a drive that is never
   // recorded cannot contribute to either.
+  // A click on Reticle's own panel (the HUD exposed) is not a step of the app's journey: saved, the
+  // app's flow pressed Run Harness on replay, a paid drive, under an intent that never named it.
+  if (true === asRecord(res)['reticleUi']) return;
   const step = compileActStep(args, res);
   // Keep the assertion the agent actually made. `act_and_wait { until }` IS the agent saying what
   // success means — the large majority of calls carry one — and dropping it produced a flow graded
@@ -152,6 +187,7 @@ export function captureAct(
   if (route !== undefined) step.page = route;
   const intent = asString(args['intent'])?.trim();
   if (intent !== undefined && intent.length > 0) step.intent = intent;
+  if (wrote) step.writes = true;
   recordings.capture(step, route, session);
 }
 
@@ -168,9 +204,11 @@ export function captureVerdictedAct(
   route: string | undefined,
   verified: string | undefined,
   session?: string,
+  /** The act's window sent a write request; see `wroteIn`. */
+  wrote = false,
 ): void {
   const { until: _until, predicate: _predicate, ...unproved } = args;
-  captureAct(recordings, Verified.YES === verified ? args : unproved, res, route, session);
+  captureAct(recordings, Verified.YES === verified ? args : unproved, res, route, session, wrote);
 }
 
 /** Fold a PASSING standalone assertion into the step it proved. See RecordingStore.attachExpect. */
@@ -250,9 +288,37 @@ function compileAnchorArgs(
   action: string,
   actArgs: Record<string, unknown>,
 ): { args: Record<string, unknown>; stable: boolean } {
+  const compiled = anchorArgs(r, ref, action, actArgs);
+  // The SDK says the target holds a secret (a password input, whatever its label). Carried beside
+  // the anchor so the saved flow redacts the fill by what the field IS, not by what it is called.
+  if (true === r['secret']) compiled.args[SECRET_FIELD_ARG] = true;
+  return compiled;
+}
+
+function anchorArgs(
+  r: Record<string, unknown>,
+  ref: string,
+  action: string,
+  actArgs: Record<string, unknown>,
+): { args: Record<string, unknown>; stable: boolean } {
+  // A document-key press with no ref ran live against no element (act-target resolves it to the
+  // document), so there is nothing to anchor and nothing missing. It used to fall through to the
+  // ref-bound branch with an empty ref, which saved as the degraded placeholder and drifted on every
+  // replay with "add a data-testid", on a step that has no element to add one to (#1559).
+  if (0 === ref.length && isGlobalPressCall({ action, args: actArgs })) {
+    return {
+      args: { by: QueryBy.ROLE, value: DOCUMENT_ANCHOR_ROLE, action, args: actArgs },
+      stable: true,
+    };
+  }
   const testid = asString(r['testid']);
   const source = sourceFromResult(r);
-  if (testid !== undefined) {
+  // Several elements carry this test id, so a replay would take the first: anchor on role and name
+  // when the element has them, else keep the test id and say how many share it.
+  const testidOf =
+    'number' === typeof r['testidOf'] && 1 < r['testidOf'] ? r['testidOf'] : undefined;
+  const named = asString(r['role']) !== undefined && asString(r['name']) !== undefined;
+  if (testid !== undefined && !(testidOf !== undefined && named)) {
     // The testid anchors the step; source rides along purely so a failure can name a file. Carrying
     // both was the point of separating anchor from provenance at capture time.
     const testidArgs: Record<string, unknown> = {
@@ -262,6 +328,7 @@ function compileAnchorArgs(
       args: actArgs,
     };
     if (source !== undefined) testidArgs['source'] = source;
+    if (testidOf !== undefined) testidArgs['of'] = testidOf;
     return { args: testidArgs, stable: true };
   }
   // Role + NAME before component: a component/source anchor names the JSX site, so every row's copy
@@ -306,7 +373,9 @@ export function compileSequenceStep(args: Record<string, unknown>, res: unknown)
     ? (asRecord(res)['steps'] as unknown[])
     : [];
   let stable = inputSteps.length > 0;
-  const subSteps = inputSteps.map((raw, i) => {
+  const subSteps = inputSteps.flatMap((raw, i) => {
+    // A step on Reticle's own panel is not a step of the app's journey, as for a single act.
+    if (true === asRecord(resolved[i])['reticleUi']) return [];
     const step = asRecord(raw);
     const compiled = compileAnchorArgs(
       asRecord(resolved[i]),
@@ -319,7 +388,7 @@ export function compileSequenceStep(args: Record<string, unknown>, res: unknown)
     // one batch, but what each step CLAIMED is per step -- folding them together would let one
     // signal answer for every click in the journey.
     const expect = enforceableExpect(step['expect']);
-    return expect === undefined ? compiled.args : { ...compiled.args, expect };
+    return [expect === undefined ? compiled.args : { ...compiled.args, expect }];
   });
   const timeoutMs = explicitTimeoutMs(args);
   return {
@@ -351,8 +420,12 @@ async function resolveRef(
     source?: unknown;
     nth?: unknown;
     of?: unknown;
+    action?: unknown;
+    args?: unknown;
   },
 ): Promise<{ ref: string; note?: string }> {
+  // Dispatched the way it ran live: at the document, with no ref. See compileAnchorArgs.
+  if (isDocumentPress(step)) return { ref: '' };
   const by = asString(step.by);
   const value = asString(step.value);
   if (by === QueryBy.TESTID && value !== undefined) {
@@ -408,6 +481,22 @@ async function resolveRef(
     throw new Error('step has no resolvable anchor (testid, role+name, component) and no ref');
   }
   return { ref, note: 'replayed by stale ref (not portable across sessions)' };
+}
+
+/**
+ * A compiled step that presses a document key at no element (#1559).
+ *
+ * Both halves are required. The anchor alone is not enough, because a hand-edited `role: document`
+ * on a click would then dispatch that click at nothing; and the press alone is not enough, because a
+ * recorded Escape aimed at a named element keeps that element.
+ */
+export function isDocumentPress(step: Record<string, unknown>): boolean {
+  return (
+    QueryBy.ROLE === step['by'] &&
+    DOCUMENT_ANCHOR_ROLE === step['value'] &&
+    undefined === step['name'] &&
+    isGlobalPressCall({ action: step['action'], args: step['args'] })
+  );
 }
 
 interface ReplayStepResult {

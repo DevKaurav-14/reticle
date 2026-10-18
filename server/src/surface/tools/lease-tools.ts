@@ -19,7 +19,7 @@ import {
 import { mutationPortFor, type NetworkMutationPort } from '@/portal/input/network-mutation.js';
 import type { Perturbation } from '@reticlehq/core';
 import { z } from 'zod';
-import { leaseNotConnectedHint, type LeaseEvidence } from './lease-hint.js';
+import { leaseNotConnectedHint, leaseStillLoadingHint, type LeaseEvidence } from './lease-hint.js';
 import { probeLeaseAlive, tabHidden } from './lease-readiness.js';
 import { probeSdkMarker } from './gaps/sdk-marker-probe.js';
 import { observeWebDocument } from '@/portal/session/dev-server/served-document.js';
@@ -38,11 +38,12 @@ import {
   RETICLE_URL_PARAM,
   RETICLE_DEFAULT_PORT,
   SeedStorageSchema,
+  originOf,
   type SeedStorage,
 } from '@reticlehq/core';
 import { HudVisibility, ReticleTool, SESSION_HEALTH } from '@reticlehq/core';
 import { HOST_STUB_NOTE, type ToolDef, type ToolDeps } from './tool-kit.js';
-import type { BrowserPool } from '@/portal/pool/browser-pool.js';
+import { type BrowserPool, PoolAtCapacityError } from '@/portal/pool/browser-pool.js';
 import { asString } from '@reticlehq/core';
 import { chromiumPreflightRefusal } from '@/command/cli/doctor/browser/chromium-hint.js';
 import {
@@ -53,6 +54,7 @@ import {
   permissionRefusal,
   refuseRegrant,
 } from './lease-permissions.js';
+import { LEASE_EMULATE_ARG, leaseEmulationOf } from '@/portal/input/viewport-tools.js';
 
 /**
  * Everything the daemon already knows about why a leased tab might not have dialled in.
@@ -114,15 +116,6 @@ async function leaseEvidence(deps: ToolDeps, port: number, url: string): Promise
 
 const POOL_UNAVAILABLE =
   'browser pool unavailable — the lease tools need the daemon-managed pool (start Reticle via `reticle mcp`).';
-
-/** The origin of a URL, or undefined when it does not parse. */
-function originOf(url: string): string | undefined {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
-}
 
 const ALREADY_HELD_LEASE = 'you already hold a lease on this origin';
 
@@ -243,6 +236,8 @@ function sessionParamOf(url: string | undefined): string | undefined {
 
 const LEASE_READY_ATTEMPTS = 100;
 const LEASE_READY_POLL_MS = 100;
+/** Extra readiness waits allowed while the leased page is still loading (each one is ~10 s). */
+const LEASE_LOADING_GRACE_ROUNDS = 3;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -267,6 +262,7 @@ export async function acquireLeasedSession(
       release: () => Promise<void>;
       navStatus?: number;
       injectReader?: () => Promise<boolean>;
+      isLoading?: () => Promise<boolean>;
     }>;
     /**
      * The address this lease's page said it could not reach. Optional so a test double need not
@@ -348,14 +344,35 @@ export async function waitForLeasedSession(
  * that stayed silent through the whole readiness wait is the one that gets a reader.
  */
 export async function connectOrInject(
-  lease: { injectReader?: () => Promise<boolean> },
+  lease: { injectReader?: () => Promise<boolean>; isLoading?: () => Promise<boolean> },
   isConnected: () => boolean,
   wait: (isConnected: () => boolean) => Promise<boolean> = waitForLeasedSession,
-): Promise<{ ready: boolean; zeroInstall: boolean }> {
+  graceRounds: number = LEASE_LOADING_GRACE_ROUNDS,
+): Promise<{ ready: boolean; zeroInstall: boolean; stillLoading?: true }> {
   if (await wait(isConnected)) return { ready: true, zeroInstall: false };
-  if (true !== (await lease.injectReader?.())) return { ready: false, zeroInstall: false };
-  const ready = await wait(isConnected);
-  return { ready, zeroInstall: ready };
+  const injected = true === (await lease.injectReader?.());
+  if (injected && (await wait(isConnected))) return { ready: true, zeroInstall: true };
+  // A slow first dev compile can hold the document past both waits, and its app connects a moment
+  // later (#1555). Keep waiting while the page itself says it is still loading, bounded so a page
+  // that never finishes cannot hold the acquire forever.
+  for (let round = 0; round < graceRounds; round++) {
+    if (!(await pageStillLoading(lease))) break;
+    if (await wait(isConnected)) return { ready: true, zeroInstall: injected };
+  }
+  // Re-check right before answering: a connect that landed during the last loading probe counts.
+  if (isConnected()) return { ready: true, zeroInstall: injected };
+  return (await pageStillLoading(lease))
+    ? { ready: false, zeroInstall: false, stillLoading: true }
+    : { ready: false, zeroInstall: false };
+}
+
+/** Whether the leased page reports it has not finished loading. Unknown counts as loaded. */
+async function pageStillLoading(lease: { isLoading?: () => Promise<boolean> }): Promise<boolean> {
+  try {
+    return true === (await lease.isLoading?.());
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -378,7 +395,7 @@ export function hasOriginLock(origin: string): boolean {
 export const LEASE_ACQUIRE_TOOL: ToolDef = {
   name: ReticleTool.LEASE_ACQUIRE,
   description:
-    'Lease a fresh isolated browser context from the shared pool (shown or hidden as the daemon was started; `headed: true` forces a window) and navigate it to the app URL (the app must already be running; one with no Reticle SDK gets one supplied, reported as zeroInstall). If this origin is already leased and still connected, this returns THAT session rather than minting a second tab — a second acquire on the same origin poisons default session resolution. Returns the sessionId the leased tab registers — pass it to other tools. The pool keeps all leases in ONE browser and caps concurrency; if at capacity this waits for a free slot. Release with reticle_lease{action:"release"} when the flow is done. PREFER AN ALREADY-OPEN TAB: if reticle_sessions lists a non-leased session for this app, drive THAT instead — a lease is invisible to the person watching the app, whose HUD lives in their own tab, and a tab flagged hidden/throttled is often still driveable. Lease for isolation you actually need (a second identity, a clean context, parallel flows) or when driving the open tab has failed — this call answers with `preferExisting` when a live tab was available.',
+    'Lease a fresh isolated browser context from the shared pool (shown or hidden as the daemon was started; `headed: true` forces a window) and navigate it to the app URL (the app must already be running; one with no Reticle SDK gets one supplied, reported as zeroInstall). If this origin is already leased and still connected, this returns THAT session rather than minting a second tab — a second acquire on the same origin poisons default session resolution. Returns the sessionId the leased tab registers — pass it to other tools. The pool keeps all leases in ONE browser and caps concurrency; if every slot is taken this is refused at once, naming the cap, rather than queued. Release with reticle_lease{action:"release"} when the flow is done. PREFER AN ALREADY-OPEN TAB: if reticle_sessions lists a non-leased session for this app, drive THAT instead — a lease is invisible to the person watching the app, whose HUD lives in their own tab, and a tab flagged hidden/throttled is often still driveable. Lease for isolation you actually need (a second identity, a clean context, parallel flows) or when driving the open tab has failed — this call answers with `preferExisting` when a live tab was available.',
   inputSchema: {
     url: z
       .string()
@@ -411,6 +428,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       .optional()
       .describe('How the HUD starts on the page: shown (default), hidden, or removed.'),
     permissions: LEASE_PERMISSIONS_ARG,
+    emulate: LEASE_EMULATE_ARG,
     root: z
       .string()
       .optional()
@@ -446,7 +464,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       ])
       .optional()
       .describe(
-        'Present only when ready is false. sdk_never_dialled ⇒ nothing connected within the wait, so check the install (the app may not embed @reticlehq/core). sdk_stopped_answering ⇒ an SDK did connect and has stopped replying, so the tab is wedged and needs recovering, not reinstalling. tab_hidden ⇒ the SDK answers but its tab is hidden, so timers and animations are throttled and nothing on it verifies; bring the tab to the front, or release and re-acquire.',
+        'Present only when ready is false. sdk_never_dialled ⇒ nothing connected within the wait, so check the install (the app may not embed @reticlehq/core), unless the hint says the page was still loading, in which case it is a slow first compile and checking reticle_session { action: "list" } shortly is the next step. sdk_stopped_answering ⇒ an SDK did connect and has stopped replying, so the tab is wedged and needs recovering, not reinstalling. tab_hidden ⇒ the SDK answers but its tab is hidden, so timers and animations are throttled and nothing on it verifies; bring the tab to the front, or release and re-acquire.',
       ),
     expiresInMs: z
       .number()
@@ -497,6 +515,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
     const headed = true === args['headed'];
     const hud = Object.values(HudVisibility).find((v) => v === args['hud']);
     const permissions = parseLeasePermissions(args['permissions']);
+    const emulate = leaseEmulationOf(args['emulate']);
     // The stub of the shell bindings, when the caller supplied one. Installed by the pool before
     // the first navigation, so it is already defined when the app's first module runs.
     const initScript = asString(args['initScript']);
@@ -564,7 +583,11 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
         existing !== undefined &&
         'boolean' === typeof certAsked &&
         pool.ignoresHTTPSErrors(existing) !== certAsked;
-      if ((validatedSeed !== undefined || certMismatch) && existing !== undefined) {
+      // Emulation is set before the first paint, so a held lease is replaced like a seeded one.
+      if (
+        (validatedSeed !== undefined || certMismatch || emulate !== undefined) &&
+        existing !== undefined
+      ) {
         // Seeding or a different certificate setting asked for: release its own context so the new
         // lease starts with what was asked.
         await pool.release(existing);
@@ -627,14 +650,19 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       try {
         lease = await pool.acquire(navUrl, {
           sessionId,
+          // An agent, or `reticle drive` behind it, is waiting on this answer and cannot see a queue:
+          // a full pool is said at once, not discovered as a 60 s silence (#1535).
+          whenFull: 'refuse',
           ...(headed ? { headed } : {}),
           ...(deps.attachId === undefined ? {} : { owner: deps.attachId }),
           ...(validatedSeed !== undefined ? { seedStorage: validatedSeed } : {}),
           ...(initScript !== undefined ? { initScript } : {}),
           ...(permissions !== undefined ? { permissions } : {}),
           ...(true === args['ignoreHTTPSErrors'] ? { ignoreHTTPSErrors: true } : {}),
+          ...(emulate === undefined ? {} : { emulate }),
         });
       } catch (err) {
+        if (err instanceof PoolAtCapacityError) throw err;
         const refusal = permissionRefusal(err);
         if (refusal !== undefined) throw refusal;
         if (err instanceof Error && err.message.startsWith('Storage seeding failed')) {
@@ -648,7 +676,8 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       // Resolved rather than assumed: an app that names its own session registers under that name,
       // and the id we hand back has to be the one the agent can actually drive.
       let registeredId: string | undefined;
-      const { ready, zeroInstall } = await connectOrInject(lease, () => {
+      const waitStartedAt = Date.now();
+      const { ready, zeroInstall, stillLoading } = await connectOrInject(lease, () => {
         registeredId = resolveLeasedSessionId(deps.sessions, lease.sessionId);
         return registeredId !== undefined;
       });
@@ -707,7 +736,9 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
         ...hintOf(
           ready
             ? undefined
-            : await notConnectedHint(deps, url, pool.dialFailureUrl?.(lease.sessionId)),
+            : true === stillLoading
+              ? leaseStillLoadingHint(url, Date.now() - waitStartedAt)
+              : await notConnectedHint(deps, url, pool.dialFailureUrl?.(lease.sessionId)),
           ready ? await notificationReadBack(pool, lease.sessionId, permissions) : undefined,
         ),
       };
@@ -753,6 +784,14 @@ const LEASE_RELEASE_TOOL: ToolDef = {
     const sessionId = asString(args['sessionId']);
     if (sessionId === undefined || 0 === sessionId.length) {
       throw new Error('reticle_lease{action:"release"} requires a sessionId');
+    }
+    // An id that holds no lease (a typo, or one that expired) answered `released: true`.
+    if (pool.leaseUrl(sessionId) === undefined) {
+      const held = pool.leasedSessionIds();
+      throw new Error(
+        `reticle_lease{action:"release"}: no lease '${sessionId}' is held, so nothing was released. ` +
+          (0 === held.length ? 'No lease is held now.' : `Leases held now: ${held.join(', ')}.`),
+      );
     }
     return { released: true, leased: await releaseLease(deps, pool, sessionId) };
   },

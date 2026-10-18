@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { createNodeFileSystem } from '@/memory/project/fs/fs-port.js';
 import { CLOUD_LINK_FILE, resolveProjectCloud } from '@/memory/cloud/cloud-config.js';
 import {
-  memoryReadUrl,
+  readMemoryPages,
   MemoryResponseScope,
   scopeMemoryResponse,
   scopeOfMemoryResponse,
@@ -51,8 +51,15 @@ import { brokenOf } from './known-regression.js';
 import { describeUnsyncedBriefly } from '@/memory/cloud/unsynced-roots.js';
 import { machineUnsyncedRoots } from '@/memory/project/sync-status.js';
 import { describeSync, runSyncCycle } from '@/memory/cloud/sync-cycle.js';
-import { diskSink, diskSource, readCloudIssues, readCloudState } from '@/memory/cloud/sync-disk.js';
+import {
+  diskSink,
+  diskSource,
+  policyScreenshots,
+  readCloudIssues,
+  readCloudState,
+} from '@/memory/cloud/sync-disk.js';
 import { fetchPlatformRun } from '@/features/harness/platform/platform-drives.js';
+import { SERVER_VERSION } from '@/command/version/identity/server-version.js';
 
 /**
  * Where `reticle login` dials when nothing says otherwise: the hosted service.
@@ -370,9 +377,7 @@ const cmdSync = async (argv: readonly string[]): Promise<number> => {
     // `memory` is the project's cross-run history and the derived records that summarise it.
     derived: (kind: Parameters<typeof full.derived>[0]): unknown =>
       cloud.policy.memory ? full.derived(kind) : undefined,
-    ...(cloud.policy.screenshots && full.screenshot !== undefined
-      ? { screenshot: full.screenshot }
-      : {}),
+    ...policyScreenshots(full.screenshot, cloud.policy),
   };
 
   const once = async (): Promise<number> => {
@@ -385,6 +390,7 @@ const cmdSync = async (argv: readonly string[]): Promise<number> => {
       sink: diskSink(reticleRoot),
       state: readCloudState(reticleRoot),
       now: () => Date.now(),
+      clientVersion: SERVER_VERSION,
       request: (url, init) => syncRequest(url, init),
     });
     emit({
@@ -576,8 +582,9 @@ const cmdMemory = async (argv: readonly string[]): Promise<number> => {
   // `undefined` for anything it cannot show to be this project's, so there is no ordering a future
   // edit can get wrong — the body it must not print is one it was never handed. The verdict is read
   // only to say WHICH refusal this is.
-  const scope = { projectId, subject };
-  const body = await api('GET', memoryReadUrl(url, scope), apiKey);
+  const body = await readMemoryPages(url, { projectId, subject }, (page) =>
+    api('GET', page, apiKey),
+  );
   const printable = scopeMemoryResponse(body, projectId);
   if (printable === undefined) {
     err(

@@ -113,7 +113,7 @@ const REACHES_FOR: Record<string, readonly string[]> = {
    * under their old home; they are the same edges, now attributed to the directory that owns them.
    */
   // `hooks` for whether the Harness may press an outward control: who is acting is only known there.
-  act: ['page-commands', 'capsule', 'input', 'read', 'session', 'hooks'],
+  act: ['page-commands', 'capsule', 'input', 'read', 'session', 'hooks', 'facts'],
   /**
    * The read leaves: what a snapshot or a query LOOKS like, with no opinion about what it means.
    *

@@ -33,6 +33,9 @@ import { describeCaseMiss, describeSplitTextMiss } from './split-text-miss.js';
 import { satisfiesProperty, type Baseline, type PropertyAssertion } from './property.js';
 import { describeNameNearMiss } from './name-near-miss.js';
 
+export const ARIA_HIDDEN_NOTE =
+  'text is inside an aria-hidden subtree — drawn on screen but excluded from the accessible tree';
+
 /**
  * The caveat for a present-testid list that was cut at its cap, or nothing when it was whole.
  *
@@ -73,8 +76,13 @@ async function matchOnce(
   session: PredicateSession,
   query: ElementQuery,
   state: ElementState | undefined,
+  diagnose?: boolean,
 ): Promise<MatchResult> {
-  const res = await session.command(ReticleCommand.MATCH, { query, state });
+  const res = await session.command(ReticleCommand.MATCH, {
+    query,
+    state,
+    ...(true === diagnose ? { diagnose: true } : {}),
+  });
   if (!res.ok) return { matched: false, count: 0, elements: [] };
   return (res.result ?? { matched: false, count: 0, elements: [] }) as MatchResult;
 }
@@ -136,6 +144,17 @@ function versionParts(version: string): [number, number, number] | undefined {
   return null === m ? undefined : [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
+/** Whether the page's SDK is older than `since`. An unknown or unreadable version is not. */
+function sdkPredates(sdk: string | undefined, since: string): boolean {
+  const have = sdk === undefined ? undefined : versionParts(sdk);
+  const need = versionParts(since);
+  if (have === undefined || need === undefined) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (have[i] !== need[i]) return (have[i] ?? 0) < (need[i] ?? 0);
+  }
+  return false;
+}
+
 /** The state, when the page's SDK is older than the first release that answers it. */
 function stateTheSdkPredates(
   sdk: string | undefined,
@@ -143,15 +162,11 @@ function stateTheSdkPredates(
 ): { sdk: string; state: ElementState; since: string } | undefined {
   const since = state === undefined ? undefined : ELEMENT_STATE_SINCE[state];
   if (sdk === undefined || state === undefined || since === undefined) return undefined;
-  const have = versionParts(sdk);
-  const need = versionParts(since);
-  if (have === undefined || need === undefined) return undefined;
-  for (let i = 0; i < 3; i += 1) {
-    if (have[i] !== need[i])
-      return (have[i] ?? 0) < (need[i] ?? 0) ? { sdk, state, since } : undefined;
-  }
-  return undefined;
+  return sdkPredates(sdk, since) ? { sdk, state, since } : undefined;
 }
+
+/** The first SDK release whose element query accepts `matchCase`; an older page refuses the query. */
+const MATCH_CASE_SINCE = '3.7.0';
 
 export async function evalElement(
   session: PredicateSession,
@@ -183,7 +198,7 @@ export async function evalElement(
     const reason = describeUnusableElementQuery(query, residual.unusable);
     return { pass: false, failureReason: reason, inconclusive: reason };
   }
-  let match = await matchOnce(session, withAltProjected(query, residual.checks), state);
+  let match = await matchOnce(session, withAltProjected(query, residual.checks), state, diagnose);
   const subject = JSON.stringify(query);
   // A residual narrows the SET; `count` is every match while `elements` is only the described prefix,
   // so a locator broad enough to be truncated cannot be narrowed honestly. Say so instead of guessing.
@@ -360,10 +375,12 @@ export async function evalElement(
   const nearMissRole = QueryBy.ROLE === query.by ? query.value : query.role;
   const nearMiss = describeNameNearMiss(match.hint?.nameNearMiss, query.name, nearMissRole);
   const caseMiss = describeCaseMiss(match.hint?.caseMiss);
+  const ariaNote = true === match.hint?.ariaHiddenMatch ? ARIA_HIDDEN_NOTE : undefined;
   const clause =
     caseMiss ??
     splitText ??
     nearMiss ??
+    ariaNote ??
     (alsoHere === undefined || '' === alsoHere ? undefined : alsoHere);
   const suffix = clause === undefined ? '' : ` — ${clause}`;
   // The evidence list is capped in document order, so a region low on the page is exactly what it
@@ -479,19 +496,22 @@ async function nearestByName(
  * priya" could never catch a capitalisation defect. An undefined `contains` must not reach the query
  * as `text: undefined` — that is a locator asking for the empty string.
  */
-export function textPredicateQuery(predicate: {
-  contains?: string | undefined;
-  ignoreCase?: boolean | undefined;
-  scope?: string | undefined;
-  self?: boolean | undefined;
-}): ElementQuery {
+export function textPredicateQuery(
+  predicate: {
+    contains?: string | undefined;
+    ignoreCase?: boolean | undefined;
+    scope?: string | undefined;
+    self?: boolean | undefined;
+  },
+  /** The page SDK's version. A page older than MATCH_CASE_SINCE rejects the field outright. */
+  sdkVersion?: string,
+): ElementQuery {
+  // ponytail: an older page compares case-blind, as the engine did before it sent the field; update the SDK for case-exact checks.
+  const matchCase = true !== predicate.ignoreCase && !sdkPredates(sdkVersion, MATCH_CASE_SINCE);
   return {
     ...(undefined === predicate.contains
       ? {}
-      : {
-          text: predicate.contains,
-          ...(true === predicate.ignoreCase ? {} : { matchCase: true }),
-        }),
+      : { text: predicate.contains, ...(matchCase ? { matchCase: true } : {}) }),
     ...(undefined === predicate.scope
       ? {}
       : { scope: predicate.scope, ...(true === predicate.self ? { self: true } : {}) }),

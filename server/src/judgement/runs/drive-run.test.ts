@@ -86,6 +86,37 @@ describe('a drive folded into a run', () => {
     expect(driveRunFrom([action(Verified.YES)], DEPS)?.checks[0]).not.toHaveProperty('intent');
   });
 
+  // An agent that gave no intent left its check titled with engine wording on the platform. The
+  // verdict now records a sentence and the part of a conjunction that failed; the run carries both.
+  it('carries the sentence and the failed part the verdict recorded', () => {
+    const failed: JournalAction = {
+      ...action(Verified.NO),
+      effect: {
+        claim: 'all of (…)',
+        verified: Verified.NO,
+        intent: 'No PATCH request to /assignee was made',
+        intentDerived: true,
+        failedPart: 1,
+      },
+    };
+    const check = driveRunFrom([failed], DEPS)?.checks[0];
+    expect(check?.intent).toBe('No PATCH request to /assignee was made');
+    expect(check?.intentDerived).toBe(true);
+    expect(check?.failedPart).toBe(1);
+    const built = buildVerificationRun(
+      driveRunFrom([failed], DEPS) as VerificationRunInput,
+      () => 0,
+    );
+    expect(built.checks[0]?.failedPart).toBe(1);
+    // The agent's own words, from the call, still win.
+    const own = driveRunFrom(
+      [{ ...failed, args: { intent: 'changing the assignee saves' } }],
+      DEPS,
+    );
+    expect(own?.checks[0]?.intent).toBe('changing the assignee saves');
+    expect(own?.checks[0]).not.toHaveProperty('intentDerived');
+  });
+
   it('keeps the action each check came from, so its screenshot can find it', () => {
     const run = driveRunFrom([action(Verified.YES, 'the row disappears', 41)], DEPS);
     expect(run?.checks[0]?.actionId).toBe('c41');

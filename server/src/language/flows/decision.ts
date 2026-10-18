@@ -14,8 +14,10 @@ import {
   unreachedRoutes,
   SuiteIsolation,
 } from '@reticlehq/core';
+import { replayability, Replayable } from './flow-replayable.js';
 import { classifyFlowAssertions, FlowAssertionGrade } from './flow-classify.js';
 import { SUCCESS_STEP_TOOL } from './flow-success.js';
+import { RECORD_A_FLOW } from './suite/coverage.js';
 
 /**
  * Turn a replay result into the autonomy DECISION envelope — the judgement a human reviewer used to
@@ -64,7 +66,7 @@ const INTENT_BROKEN_PREFIX = 'NO LONGER TRUE: ';
  * agent will act on it. The same rule as the source pointer — absence stays honest.
  */
 const NO_INTENT_ON_PASS =
-  'no intent declared, so this proves the steps ran, not what they were for — declare one with reticle_intent.';
+  'no intent declared, so this proves the steps ran, not what they were for — declare one with reticle_run { tool: "reticle_intent" }.';
 const NO_INTENT_ON_FAIL = 'no intent declared, so this names the mechanism, not the stakes.';
 
 /** `<intent> — <mechanical>`, or the mechanical sentence plus the honest absence. */
@@ -263,7 +265,7 @@ export function unverifiableReason(
 ): string | undefined {
   if (flow === undefined) return undefined;
   if (0 === flow.steps.length) {
-    return 'the flow has no steps — it replays green whatever the app does. Record it again, or add steps with reticle_annotate.';
+    return 'the flow has no steps — it replays green whatever the app does. Record it again, or add steps with reticle_run { tool: "reticle_annotate" }.';
   }
   const c = classifyFlowAssertions(flow, invoked);
   if (c.grade !== FlowAssertionGrade.ASSERTION_FREE) return undefined;
@@ -395,7 +397,7 @@ export function buildSuiteVerdict(
       : ` — ${String(unreached.length)} known route(s) never opened: ${unreached.join(', ')}`;
   const summary =
     0 === total
-      ? 'no flows to verify — nothing was checked. Record one with reticle_record { action: "start" }, then reticle_flow_save.'
+      ? `no flows to verify — nothing was checked. ${RECORD_A_FLOW}`
       : 0 === failed
         ? 0 === unverifiable.length
           ? `all ${total} flow${1 === total ? '' : 's'} pass`
@@ -413,18 +415,31 @@ export function buildSuiteVerdict(
     SuiteIsolation.SHARED_SESSION === isolation && total > 1
       ? ' — these flows shared one session and ran in order, so a pass here may rest on state an earlier flow left behind; replay with `parallel` to give each its own context'
       : '';
+  const notAsSaved = runs.flatMap(({ replay, flow }) => {
+    if (flow === undefined) return [];
+    const report = replayability(flow);
+    return Replayable.YES === report.status && report.writes === undefined
+      ? []
+      : [{ flow: replay.name, ...report }];
+  });
+  const notReplayable = notAsSaved.filter((row) => Replayable.YES !== row.status);
+  const asSaved =
+    0 === notReplayable.length
+      ? ''
+      : ` — ${String(notReplayable.length)} of ${String(total)} flows are not replayable as saved (${notReplayable.map((row) => row.flow).join(', ')}): a drift there is the flow, not the app`;
   return {
     status,
     total,
     passed,
     failed,
-    summary: summary + silentSteps + neverOpened + disagreed + sharedState,
+    summary: summary + silentSteps + neverOpened + disagreed + sharedState + asSaved,
     failures,
     ...(isolation === undefined ? {} : { isolation }),
     ...(unverifiable.length > 0 ? { unverifiable } : {}),
     ...(coverage === undefined ? {} : { coverage }),
     ...(0 === unreached.length ? {} : { unreached }),
     ...(0 === contradictions.length ? {} : { contradictions }),
+    ...(0 === notAsSaved.length ? {} : { replayability: notAsSaved }),
   };
 }
 

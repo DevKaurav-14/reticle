@@ -99,4 +99,4 @@ If you want an agent to be unable to call a change finished without re-verifying
 
 ### verify exited 1 but I cannot see which flow failed.
 
-The verdict is in the run artifact, not only in the log. Each run writes `.reticle/runs/<id>.json` with `repair.failurePackets[]` naming what broke and where; `reticle_run_export { format: "report" }` renders it legibly. The artifact is stable and versioned precisely so a CI surface can render it without parsing log lines.
+The verdict is in the run artifact, not only in the log. Each run writes `.reticle/runs/<id>.json` with `repair.failurePackets[]` naming what broke and where; `reticle_run_export { format: "report" }` renders it legibly. The artifact is stable and versioned precisely so a CI surface can render it without parsing log lines. Each entry in `checks[]` carries `intent`, a sentence a person can read: the agent's own `intent` when it gave one, else a sentence built from the predicate in the failure voice ("No PATCH request to /assignee was made"), marked `intentDerived: true`. A failed `allOf` also carries `failedPart`, the index of the part that failed, so a title can name the one thing that did not happen.

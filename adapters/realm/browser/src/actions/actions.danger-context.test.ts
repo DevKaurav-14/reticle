@@ -224,9 +224,9 @@ describe('what a Harness command may press', () => {
   it('refuses Invite, Send, Remove and Pay unless the journey asked', async () => {
     document.body.innerHTML =
       '<button id="i">Invite</button><button id="s">Send message</button>' +
-      '<button id="r">Remove member</button><button id="p">Add a card and start the trial</button>';
+      '<button id="r">Remove member</button>';
     setOutwardPolicy([]);
-    for (const id of ['#i', '#s', '#r', '#p'])
+    for (const id of ['#i', '#s', '#r'])
       await expect(executeAction(refTo(id), 'click', { confirmDangerous: true })).rejects.toThrow(
         /not done \(outward action\)/,
       );
@@ -238,6 +238,37 @@ describe('what a Harness command may press', () => {
     await expect(executeAction(refTo('#i'), 'click')).resolves.toBeDefined();
     setOutwardPolicy([]);
     await expect(executeAction(refTo('#o'), 'click')).resolves.toBeDefined();
+  });
+
+  // Three of four explores failed on "Start free trial" refused as "would need to pay". The payment
+  // boundary is typing card details or leaving for a payment provider, not a button's words.
+  it('presses Start free trial, Upgrade and Subscribe on the app under test', async () => {
+    document.body.innerHTML =
+      '<button id="t">Start free trial</button><button id="u">Upgrade</button>' +
+      '<button id="s">Subscribe</button>';
+    setOutwardPolicy([]);
+    for (const id of ['#t', '#u', '#s'])
+      await expect(executeAction(refTo(id), 'click')).resolves.toBeDefined();
+  });
+
+  it('refuses to type into a card field or follow a link to a payment provider', async () => {
+    document.body.innerHTML =
+      '<input id="n" autocomplete="cc-number"><input id="c" name="cvc" inputmode="numeric">' +
+      '<input id="e" name="email" autocomplete="email">' +
+      '<a id="l" href="https://checkout.stripe.com/c/pay/cs_1">Continue</a>';
+    setOutwardPolicy([]);
+    for (const id of ['#n', '#c'])
+      await expect(executeAction(refTo(id), 'fill', { value: '4242' })).rejects.toThrow(
+        /would need to pay/,
+      );
+    await expect(executeAction(refTo('#l'), 'click')).rejects.toThrow(/would need to pay/);
+    await expect(executeAction(refTo('#e'), 'fill', { value: 'a@b.test' })).resolves.toBeDefined();
+  });
+
+  it('types card details when the journey asks to pay', async () => {
+    document.body.innerHTML = '<input id="n" autocomplete="cc-number">';
+    setOutwardPolicy(['pay']);
+    await expect(executeAction(refTo('#n'), 'fill', { value: '4242' })).resolves.toBeDefined();
   });
 
   it('gates nothing for an agent or a saved flow (no policy)', async () => {

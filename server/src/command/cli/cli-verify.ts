@@ -10,7 +10,7 @@
  * — is unit-tested without launching a real browser.
  */
 
-import { CLI_CLIENT_NAME } from '@/judgement/runs/verification-sync.js';
+import { cliRunAuthor } from '@/judgement/runs/verification-sync.js';
 import { join, basename } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { runAdhocVerdict } from './adhoc-verdict.js';
@@ -44,10 +44,8 @@ import {
   bridgeWsUrl,
   isLoopbackHostname,
   ReticleDir,
-  RunAgentKind,
   RunFramework,
   RunProfile,
-  RunTrigger,
   VerdictStatus,
   VerifyPhase,
   type ReticleVerificationRun,
@@ -105,7 +103,6 @@ export function verifyProjectName(
 ): string {
   return linked ?? configured ?? (folder || DEFAULT_PROJECT_NAME);
 }
-const VERIFY_AGENT_ID = CLI_CLIENT_NAME;
 
 const MSG_NO_SESSION =
   'No app connected: Reticle drove the URL but no @reticlehq/browser session dialed back.\n' +
@@ -201,9 +198,21 @@ async function openConnection(ports: VerifyPorts): Promise<VerifyConnection | un
 }
 
 /** Orchestration: boot → wait for a session → replay flows → verdict → exit code. Browser-free. */
-export async function runVerify(args: VerifyArgs, ports: VerifyPorts): Promise<void> {
-  const conn = await openConnection(ports);
+export async function runVerify(args: VerifyArgs, outer: VerifyPorts): Promise<void> {
+  const conn = await openConnection(outer);
   if (conn === undefined) return;
+  /*
+   * The exit is held until the connection has closed. The live exit is process.exit, and close()
+   * runs the last cloud sync cycle that sends this run's flows and screenshots: exiting first skipped
+   * the `finally` below, so with no daemon running the run reached the dashboard without them.
+   */
+  let exitCode: number | undefined;
+  const ports: VerifyPorts = {
+    ...outer,
+    exit: (code) => {
+      exitCode = code;
+    },
+  };
   try {
     const ready = await conn.sessionReady(args.timeoutMs);
     if (!ready) {
@@ -275,7 +284,7 @@ export async function runVerify(args: VerifyArgs, ports: VerifyPorts): Promise<v
       progress.stop();
       await progress.flush().catch(() => undefined);
     }
-    await pushRunToCloud(run, cloud, ports); // best-effort; opt-in; never changes the verdict or exit code
+    const pushed = await pushRunToCloud(run, cloud, ports); // best-effort; opt-in; never changes the verdict or exit code
     /*
      * The last event anybody watching is waiting for, sent after the artifact has actually landed —
      * so "pushed" on a dashboard means the run is really there, not that we were about to try.
@@ -290,7 +299,7 @@ export async function runVerify(args: VerifyArgs, ports: VerifyPorts): Promise<v
     if (args.resultsJson !== undefined && ports.writeResults !== undefined) {
       await ports.writeResults(
         args.resultsJson,
-        `${JSON.stringify(verifyResults(run), null, 2)}\n`,
+        `${JSON.stringify(verifyResults(run, pushed), null, 2)}\n`,
       );
     }
     ports.out(renderRunReport(run));
@@ -300,6 +309,8 @@ export async function runVerify(args: VerifyArgs, ports: VerifyPorts): Promise<v
     ports.exit(EXIT_FAIL);
   } finally {
     await conn.close().catch(() => undefined);
+    // In the finally, so the early refusals that `return` from the try exit too.
+    if (exitCode !== undefined) outer.exit(exitCode);
   }
 }
 
@@ -350,13 +361,13 @@ async function pushRunToCloud(
   run: ReticleVerificationRun,
   config: CloudConfig | null,
   ports: VerifyPorts,
-): Promise<void> {
+): Promise<boolean> {
   if (null === config) {
     ports.out(
       `run ${run.runId} was kept on this computer: this repo is not linked, so nothing was sent ` +
         `to the dashboard. To save runs for your team: ${CONNECT}`,
     );
-    return;
+    return false;
   }
   const result = await syncRunToCloud(run, config, cloudFetch);
   if (result.outcome === SyncOutcome.SYNCED) {
@@ -366,9 +377,10 @@ async function pushRunToCloud(
         ? `↑ run ${run.runId} recorded on the Reticle dashboard`
         : seeRunLine(dashboard, run.runId),
     );
-  } else {
-    ports.fail(runSyncFailure(result.status, result.error));
+    return true;
   }
+  ports.fail(runSyncFailure(result.status, result.error));
+  return false;
 }
 
 /** The platform answered: the credential was not accepted. */
@@ -529,12 +541,11 @@ async function openLiveConnection(opts: LiveOpts): Promise<VerifyConnection> {
     verify: async (onProgress) => {
       const run = await runner.verify({
         project: { name: opts.projectName, framework: RunFramework.OTHER, previewUrl: opts.url },
-        agent: { id: VERIFY_AGENT_ID, kind: RunAgentKind.OEM_PIPELINE },
-        trigger: { kind: RunTrigger.OEM },
+        ...cliRunAuthor(process.env),
         profile: RunProfile.PROD_PREVIEW,
         ...(onProgress === undefined ? {} : { onProgress }),
       });
-      // Persist the artifact. `reticle gate` decides from RunStore.latest, so without this the
+      // Persist the artifact. `reticle gate` decides from the runs in the store, so without this the
       // documented CI loop is broken end to end: `reticle verify` could pass and the gate would still
       // block, because it never sees a passing run. (Only the optional `serve --http` endpoint used to
       // persist.) Best-effort — a disk failure must not turn a passing verification into a failure.
@@ -830,6 +841,8 @@ export function handleVerify(parsed: {
           port,
           ...(parsed.url !== undefined && '' !== parsed.url ? { url: parsed.url } : {}),
           predicate: expectation,
+          // How long the expectation may take to come true (#1533).
+          ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }),
           // Read fresh, not from `presence`: that probe asks whether a daemon is on the port, and
           // this asks whether a TAB is — the difference between asserting and opening the url first.
           sessions: async () => summarizeStatus(await fetchStatus(port)).sessions,

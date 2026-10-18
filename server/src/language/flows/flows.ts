@@ -5,7 +5,13 @@ import {
   type Predicate,
   type ProjectId,
 } from '@reticlehq/core';
-import { REDACTED_FILL, SECRET_NAME_ARG, secretEnvKey } from './fields/flow-secret-field.js';
+import {
+  REDACTED_FILL,
+  SECRET_FIELD_ARG,
+  SECRET_NAME_ARG,
+  secretEnvKey,
+  withDistinctSecretKeys,
+} from './fields/flow-secret-field.js';
 export { REDACTED_FILL, secretEnvKey } from './fields/flow-secret-field.js';
 import { safeProjectId, type FlowResult } from './flow-result.js';
 import { changeInPlace } from './narrow-write.js';
@@ -13,6 +19,7 @@ export type { FlowResult } from './flow-result.js';
 import {
   AnchorKind,
   DEGRADED_ANCHOR_ROLE,
+  DOCUMENT_ANCHOR_ROLE,
   FLOW_FILE_VERSION,
   flowFileVersionFor,
   FlowErrorCode,
@@ -20,6 +27,7 @@ import {
   FlowStepTool,
   QueryBy,
   defaultIsSensitiveKey,
+  isGlobalPressCall,
 } from '@reticlehq/core';
 import type {
   ActionType,
@@ -52,6 +60,12 @@ import {
   isValidFlowName,
 } from '@/memory/project/dir/reticle-dir.js';
 import { describeFlowZodFailure, parseFlowFileText } from './flow-expect-grammar.js';
+import {
+  readyForReplay,
+  replayability,
+  Replayable,
+  type Replayability,
+} from './flow-replayable.js';
 import type { Clock } from '@/machine/clock.js';
 
 /**
@@ -107,6 +121,8 @@ export function anchorForStep(args: Record<string, unknown>): {
     };
     const source = sourceArg(args);
     if (source !== undefined) anchor.source = source;
+    const of = args['of'];
+    if ('number' === typeof of && 1 < of) anchor.of = of;
     return { anchor, degraded: false };
   }
   // Role + NAME is a real anchor, not a degraded placeholder.
@@ -116,6 +132,16 @@ export function anchorForStep(args: Record<string, unknown>): {
   // that means "add a data-testid". So a step the recorder anchored by accessible name arrived here
   // and had that name thrown away, which is precisely the anchor that distinguishes one row's
   // control from another's when a shared JSX source location cannot.
+  // A document-key press compiled with no element (#1559): a real anchor, not a degraded one. It is
+  // nameless on purpose, because it names no element; the press is what replay dispatches.
+  if (
+    by === QueryBy.ROLE &&
+    value === DOCUMENT_ANCHOR_ROLE &&
+    args['name'] === undefined &&
+    isGlobalPressCall({ action: args['action'], args: args['args'] })
+  ) {
+    return { anchor: { kind: AnchorKind.ROLE, role: DOCUMENT_ANCHOR_ROLE }, degraded: false };
+  }
   if (by === QueryBy.ROLE && value !== undefined) {
     const name = asString(args['name']);
     if (name !== undefined && name.length > 0) {
@@ -139,7 +165,7 @@ function subStepToFlowStep(raw: unknown): FlowStep {
   const action = asString(sub['action']) as ActionType | undefined;
   const args = asRecord(sub['args']);
   const { anchor, degraded } = anchorForStep(sub);
-  const step = buildStep(ReticleTool.ACT, anchor, action, args, degraded);
+  const step = buildStep(ReticleTool.ACT, anchor, action, args, degraded, markedSecret(sub));
   /*
    * The sub-step's own declared consequence, carried rather than folded into the parent.
    *
@@ -170,13 +196,21 @@ function subStepToFlowStep(raw: unknown): FlowStep {
 function redactSecretFill(
   anchor: FlowAnchor,
   args: Record<string, unknown>,
+  /** The SDK said the target holds a secret: redact whatever the field is called. */
+  secret = false,
 ): Record<string, unknown> {
   if (typeof args['value'] !== 'string') return args;
   const field = anchorFieldName(anchor);
-  if (field === undefined || !defaultIsSensitiveKey(field)) return args;
+  const sensitive = secret || (field !== undefined && defaultIsSensitiveKey(field));
+  if (!sensitive) return args;
+  // ponytail: a secret field with no name (a component anchor) gets no variable; replay then refuses it.
+  if (field === undefined) return { ...args, value: REDACTED_FILL };
   // The variable that supplies it, beside the placeholder: the file alone says what to set.
   return { ...args, value: REDACTED_FILL, [SECRET_NAME_ARG]: secretEnvKey(field) };
 }
+
+/** Whether a recorded step's args carry the SDK's secret mark. */
+const markedSecret = (args: Record<string, unknown>): boolean => true === args[SECRET_FIELD_ARG];
 
 /**
  * The recorded steps as they may be SHOWN: every credential fill carries the placeholder.
@@ -199,7 +233,11 @@ export function redactRecordedSteps(steps: readonly RecordedStep[]): RecordedSte
 function redactNormalizedArgs(normalized: Record<string, unknown>): Record<string, unknown> {
   const inner = normalized['args'];
   if ('object' !== typeof inner || null === inner) return normalized;
-  const redacted = redactSecretFill(anchorForStep(normalized).anchor, asRecord(inner));
+  const redacted = redactSecretFill(
+    anchorForStep(normalized).anchor,
+    asRecord(inner),
+    markedSecret(normalized),
+  );
   return redacted === inner ? normalized : { ...normalized, args: redacted };
 }
 
@@ -229,8 +267,9 @@ function buildStep(
   action: ActionType | undefined,
   args: Record<string, unknown>,
   degraded: boolean,
+  secret = false,
 ): FlowStep {
-  const step: FlowStep = { tool, anchor, args: redactSecretFill(anchor, args) };
+  const step: FlowStep = { tool, anchor, args: redactSecretFill(anchor, args, secret) };
   if (action !== undefined) step.action = action;
   if (degraded) step.degraded = true;
   return step;
@@ -246,6 +285,7 @@ export function recordedStepToFlowStep(step: RecordedStep): FlowStep {
   if (step.timeoutMs !== undefined) out.timeoutMs = step.timeoutMs;
   if (step.page !== undefined) out.page = step.page;
   if (step.endPage !== undefined && step.endPage !== step.page) out.endPage = step.endPage;
+  if (true === step.writes) out.writes = true;
   return out;
 }
 
@@ -281,7 +321,7 @@ function anchoredStep(step: RecordedStep): FlowStep {
   const action = asString(step.args['action']) as ActionType | undefined;
   const args = asRecord(step.args['args']);
   const { anchor, degraded } = anchorForStep(step.args);
-  const out = buildStep(step.tool, anchor, action, args, degraded);
+  const out = buildStep(step.tool, anchor, action, args, degraded, markedSecret(step.args));
   if (step.expect !== undefined) out.expect = step.expect;
   return out;
 }
@@ -296,6 +336,8 @@ interface SaveSummary {
    * and absent the moment the flow carries prose or an `intentId`. See `flowIntentGap`.
    */
   intentGap?: InstrumentationGap;
+  /** Absent when the flow replays as it is; else whether it can, and why not, by step. */
+  replayability?: Replayability;
 }
 
 /**
@@ -381,12 +423,16 @@ export class FlowStore {
    */
   #summary(flow: FlowFile): SaveSummary {
     const gap = flowIntentGap(flow);
+    const replay = replayability(flow);
     return {
       name: flow.name,
       stepCount: flow.steps.length,
       degraded: flow.steps.filter((s) => true === s.degraded).length,
       empty: 0 === flow.steps.length,
       ...(gap === undefined ? {} : { intentGap: gap }),
+      ...(Replayable.YES === replay.status && replay.writes === undefined
+        ? {}
+        : { replayability: replay }),
     };
   }
 
@@ -416,13 +462,19 @@ export class FlowStore {
     };
     const intent = program.steps.find((step) => step.intent !== undefined)?.intent;
     const annotated = withAnnotations(base, annotations);
-    return {
-      ...annotated,
-      // The action's own intent, when nobody annotated the flow — see RecordedStep.intent.
-      ...(annotated.intent === undefined && intent !== undefined ? { intent } : {}),
-      ...routeClaims(annotated.startPath, annotated.steps),
-      ...(program.author === undefined ? {} : { author: program.author }),
-    };
+    return readyForReplay(
+      withDistinctSecretKeys({
+        ...annotated,
+        // The action's own intent, when nobody annotated the flow — see RecordedStep.intent.
+        ...(annotated.intent === undefined && intent !== undefined ? { intent } : {}),
+        // Else the sentence an auto-saved drive built from its expects, marked as built.
+        ...(annotated.intent === undefined && intent === undefined && program.intent !== undefined
+          ? { intent: program.intent, ...(program.intentDerived ? { intentDerived: true } : {}) }
+          : {}),
+        ...routeClaims(annotated.startPath, annotated.steps),
+        ...(program.author === undefined ? {} : { author: program.author }),
+      }),
+    );
   }
 
   /**
@@ -541,7 +593,7 @@ export class FlowStore {
         detail: describeFlowZodFailure(parsed.error),
       };
     }
-    const valid = await this.#linkIntent(parsed.data);
+    const valid = await this.#linkIntent(readyForReplay(parsed.data));
     await this.#fs.mkdir(flowParentDir(this.#root, asFlowName(valid.name), pid));
     await this.#fs.writeFile(
       flowPath(this.#root, asFlowName(valid.name), pid),

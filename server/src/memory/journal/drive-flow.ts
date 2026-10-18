@@ -1,12 +1,11 @@
 import {
   ActionType,
-  PredicateKind,
   QueryBy,
   REPLAY_PROGRAM_VERSION,
   asFlowName,
   defaultIsSensitiveKey,
 } from '@reticlehq/core';
-import { clauseOfKind } from '@reticlehq/core';
+import { journeySentence } from '@reticlehq/core';
 import type { FlowFile, FlowName, Predicate } from '@reticlehq/core';
 
 /**
@@ -40,6 +39,9 @@ export interface DriveProgram {
   steps: TapeStep[];
   startPath?: string;
   author?: FlowFile['author'];
+  /** Built from the steps' expects when no step declared an intent. Never a declared goal. */
+  intent?: string;
+  intentDerived?: true;
 }
 
 /**
@@ -69,39 +71,12 @@ const segment = (value: string, max: number): string =>
     .replace(/-$/, '');
 
 /**
- * What this flow PROVED, in a few words, from the first step that claims anything.
- *
- * Ordered by the evidence ladder the rest of the product uses: a signal is the app saying the thing
- * happened in its own words, a request is the next best, a store read is one step removed, and the
- * DOM-shaped claims are the weakest. Naming a flow after the strongest thing it proves is the same
- * judgement the honesty grade makes, reused where a human reads it.
- *
- * Returns '' when a step claims nothing nameable.
+ * What a journey proved, in one sentence, when no step declared why it was driven. An auto-saved
+ * drive was named by its request path and a hash ("drive-get-v1-runs-issues-c69f82") and its file
+ * said nothing about what it was for.
  */
-function provedSlug(steps: readonly TapeStep[]): string {
-  for (const step of steps) {
-    const expect = step.expect;
-    if (expect === undefined) continue;
-    // A predicate names its kind, so the slug reads the tree rather than probing a struct. The
-    // signal wins over the request for the same reason it always did: it is the app saying what it
-    // did, which is the strongest thing a name can carry.
-    const signal = clauseOfKind(expect, PredicateKind.SIGNAL);
-    if (signal?.name !== undefined) return segment(signal.name, 32);
-    const netClause = clauseOfKind(expect, PredicateKind.NET);
-    if (netClause !== undefined) {
-      const method = segment(netClause.method ?? '', 6);
-      const where = segment(netClause.urlContains ?? '', 24);
-      const joined = [method, where].filter((part) => '' !== part).join('-');
-      if ('' !== joined) return joined;
-    }
-    const state = clauseOfKind(expect, PredicateKind.STATE);
-    if (state !== undefined) return segment(state.path, 32);
-    const route = clauseOfKind(expect, PredicateKind.ROUTE);
-    if (route?.pathname !== undefined) return segment(route.pathname, 24);
-    const text = clauseOfKind(expect, PredicateKind.TEXT);
-    if (text?.contains !== undefined) return segment(text.contains, 24);
-  }
-  return '';
+function provedSentence(steps: readonly TapeStep[]): string | undefined {
+  return journeySentence(steps.flatMap((step) => (step.expect === undefined ? [] : [step.expect])));
 }
 
 /** Every auto-saved flow's name starts here, which is what lets a merge tell them from hand-named ones. */
@@ -123,7 +98,7 @@ export function driveFlowName(route?: string, steps: readonly TapeStep[] = []): 
   const intent = steps.find((step) => step.intent !== undefined)?.intent;
   const leg = segment(route ?? '', 24);
   const why = intent === undefined ? '' : segment(intent, 48);
-  const lead = '' !== why ? why : provedSlug(steps);
+  const lead = '' !== why ? why : segment(provedSentence(steps) ?? '', 48);
   // Minted here: every character has just been forced through `segment`, so this IS the validated
   // boundary the brand is meant to be created at.
   const parts = [lead, ...('' !== why || 0 === leg.length ? [] : [leg])].filter((p) => '' !== p);
@@ -254,7 +229,10 @@ export function driveFlowsFrom(
       continue;
     }
     const startPath = segment.route ?? tape.startPath;
+    const declared = segment.steps.some((step) => step.intent !== undefined);
+    const built = declared ? undefined : provedSentence(segment.steps);
     programs.push({
+      ...(built === undefined ? {} : { intent: built, intentDerived: true as const }),
       name: driveFlowName(startPath, segment.steps),
       version: REPLAY_PROGRAM_VERSION,
       // The route is recorder-internal and has no business on disk — `startPath` is where the

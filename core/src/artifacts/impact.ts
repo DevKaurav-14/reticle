@@ -161,7 +161,7 @@ export const AccountStateSchema = z.object({
 });
 export type AccountState = z.infer<typeof AccountStateSchema>;
 
-/** The grant Harness credits came from: sign-up, the card-started trial, or a paid plan. */
+/** The grant credits came from: sign-up, the card-started trial, or a paid plan. */
 export const CreditKind = { FREE: 'free', TRIAL: 'trial', PAID: 'paid' } as const;
 export type CreditKind = (typeof CreditKind)[keyof typeof CreditKind];
 
@@ -179,11 +179,13 @@ export const HarnessConfigSchema = z.object({
   harnessEntitled: z.boolean(),
   /** Whether the selected provider has a usable platform key. Older daemons may omit it. */
   providerReady: z.boolean().optional(),
-  /** Harness credits used and held this 30 days; one is one Harness decision. Absent: unbounded or unknown. */
+  /** Credits used and held this 30 days; a Harness decision is one. Absent: unbounded or unknown. */
   credits: z
     .object({
-      used: z.number().int().min(0),
-      limit: z.number().int().min(0),
+      // Not `.int()`: the platform charges part credits (a check can cost 0.25). One float here
+      // failed the whole impact snapshot, and the HUD then showed no account and no Harness at all.
+      used: z.number().min(0),
+      limit: z.number().min(0),
       /** The grant they came from. Optional on the wire: an older platform omits it. */
       kind: z.enum([CreditKind.FREE, CreditKind.TRIAL, CreditKind.PAID]).optional(),
       /** Whole days the grant has left, counted by the daemon from the platform's end date. */
@@ -192,6 +194,11 @@ export const HarnessConfigSchema = z.object({
     .optional(),
   /** The platform this answer came from, so the HUD's links go there and not to the hosted one. */
   platformUrl: z.string().optional(),
+  /**
+   * The console's page for credits and the trial. The API and the console are two origins, so a
+   * link built from `platformUrl` opened a 404. The HUD links here, and to this origin for set-up.
+   */
+  planUrl: z.string().optional(),
   /**
    * The platform's own Harness coverage gate, which it enforces. The HUD prefers it to the daemon's
    * local score; absent from an older platform, which leaves the local score to decide.
@@ -220,9 +227,33 @@ export const HarnessConfigSchema = z.object({
 });
 export type HarnessConfig = z.infer<typeof HarnessConfigSchema>;
 
-/** The Harness drive running in this tab's project, so the panel can show progress and Stop. */
-export const HarnessDriveSchema = z.object({ runId: z.string(), steps: z.number().int().min(0) });
+/** How many of a running drive's latest lines the snapshot carries for the Harness page's log. */
+export const HARNESS_LINES_MAX = 60;
+
+/**
+ * The Harness drive running in this tab's project, so the panel can show progress and Stop.
+ *
+ * `lines` is the drive's step log, held by the daemon: kept in the HUD's view alone, it was empty
+ * after the Harness page was closed and reopened, or the page reloaded, mid-run.
+ */
+export const HarnessDriveSchema = z.object({
+  runId: z.string(),
+  steps: z.number().int().min(0),
+  lines: z.array(z.string()).max(HARNESS_LINES_MAX).optional(),
+});
 export type HarnessDrive = z.infer<typeof HarnessDriveSchema>;
+
+/**
+ * This tab's last word from the Harness once nothing is driving: the finished run's result page,
+ * and, when it did not run to its end, why (stopped by a reload, refused, the cloud unreachable).
+ */
+export const LastDriveSchema = z.object({
+  runUrl: z.string().optional(),
+  said: z.string().optional(),
+  /** Which word this is, rising: the page tells the answer to its press from an earlier word. */
+  seq: z.number().int().min(0).optional(),
+});
+export type LastDrive = z.infer<typeof LastDriveSchema>;
 
 /** The longest note a person can send their coding agent from the HUD. */
 export const AGENT_NOTE_MAX = 500;
@@ -279,6 +310,8 @@ export const ImpactSnapshotSchema = z.object({
   harnessConfig: HarnessConfigSchema.optional(),
   /** The drive running now, when there is one. Absent: nothing is driving. */
   harnessDrive: HarnessDriveSchema.optional(),
+  /** How the last drive on this tab ended, or why none started. Absent while one drives. */
+  lastDrive: LastDriveSchema.optional(),
   /** Who is coding against this daemon, and what this tab said to them. Absent: an older daemon. */
   agent: AgentLinkSchema.optional(),
   /**

@@ -48,6 +48,8 @@ export interface RecordedStep {
    * never saved silently.
    */
   unkeptExpect?: string;
+  /** The step sent a write request (POST, PUT, PATCH, DELETE) while it was recorded. */
+  writes?: true;
 }
 
 interface ActiveRecording {
@@ -105,6 +107,9 @@ export interface CompiledProgram {
   routes?: string[];
   /** Who made it — see FlowFile.author. Stamped by the caller that knows. */
   author?: FlowFile['author'];
+  /** A sentence built from the steps' expects (an auto-saved drive): see FlowFile.intentDerived. */
+  intent?: string;
+  intentDerived?: true;
 }
 
 /**

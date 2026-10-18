@@ -11,7 +11,7 @@
  * trial. A secret field travels by name only, and its value is filled in here before the call runs.
  */
 import { PlatformRefusalCode, readRefusal, refusalSentence } from './refusal.js';
-import { ReticleEnv, cloudUrlFrom } from '@reticlehq/core';
+import { ReticleEnv, asRecord, cloudUrlFrom } from '@reticlehq/core';
 import {
   DriveStoppedError,
   type HarnessTool,
@@ -27,9 +27,13 @@ export { DRIVE_HEADER };
 export const SERVER_DRIVER_NAME = 'server';
 const RUNS_PATH = '/v1/harness/runs';
 const TURN_TIMEOUT_MS = 110_000;
+/** How long the run's spend is waited for once the drive ended. Its absence costs one number. */
+const SPENT_TIMEOUT_MS = 5_000;
 const RETRIES = 1;
 /** The platform's code for a run whose project had autonomous driving switched off. */
 const FINISH = 'finish';
+/** The platform's status for a run it ended without finishing: the app could not be driven. */
+const FAILED = 'failed';
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -150,6 +154,18 @@ export function serverDriver(options: ServerDriverOptions): ModelDriver {
   };
 
   return {
+    // The run's own record, which carries its spend however the drive ended.
+    async spent(): Promise<number | undefined> {
+      if (runId === undefined) return undefined;
+      const res = await doFetch(`${options.url}${RUNS_PATH}/${encodeURIComponent(runId)}`, {
+        method: 'GET',
+        headers: platformHeaders(options),
+        signal: AbortSignal.timeout(SPENT_TIMEOUT_MS),
+      });
+      if (!res.ok) return undefined;
+      const body = asRecord(JSON.parse(await res.text()) as unknown);
+      return 'number' === typeof body['creditsSpent'] ? body['creditsSpent'] : undefined;
+    },
     async turn(input): Promise<ModelTurn> {
       if (runId === undefined) {
         const started = (await call(RUNS_PATH, {
@@ -187,6 +203,9 @@ export function serverDriver(options: ServerDriverOptions): ModelDriver {
       turn = reply.turn + 1;
       // The platform's spend, reported so the drive's cost is visible here as it is for a local one.
       const usage = reply.usage === undefined ? {} : { usage: reply.usage };
+      // A run the platform ended as failed is a broken drive, and its summary says why.
+      if (reply.done && FAILED === reply.status)
+        throw new ServerHarnessError(reply.summary ?? reply.text, 502);
       if (reply.done) {
         // The platform has finished: `finish` ends the local loop the same way a local model would.
         return {
