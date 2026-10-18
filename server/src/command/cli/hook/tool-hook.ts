@@ -34,8 +34,6 @@ const JOURNAL_SETTING = 'journal';
 const UNKNOWN_SESSION = 'unknown';
 const AGENT_FILE_PREFIX = 'agent-';
 const BASH = 'Bash';
-const CURSOR = 'cursor';
-const GEMINI = 'gemini';
 
 type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json =>
@@ -149,10 +147,7 @@ export function toolRecordFrom(
   };
 }
 
-/** What the hook prints. Cursor and Gemini CLI read stdout as JSON; the rest need nothing. */
-export function toolHookAck(agent: string): string {
-  return CURSOR === agent || GEMINI === agent ? '{}\n' : '';
-}
+export { toolHookAck } from './hook-fast.js';
 
 interface CaptureIo {
   readonly cwd: string;

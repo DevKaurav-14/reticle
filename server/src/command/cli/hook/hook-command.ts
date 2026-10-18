@@ -25,6 +25,7 @@ import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
 import { captureToolCall, toolHookAck } from './tool-hook.js';
+import { TOOL_WRITE_ACTION } from './hook-fast.js';
 import { exportStructure } from './episode-structure.js';
 
 const HookAction = {
@@ -172,11 +173,13 @@ export async function handleHook(
     process.stdout.write(hookAck(agent));
     return 0;
   }
-  if (HookAction.TOOL === action) {
+  // `tool` normally never reaches here: `bin/reticle.js` answers it on the fast path and runs
+  // `tool-write`, the capture itself, in a detached child. Both write the same record.
+  if (HookAction.TOOL === action || TOOL_WRITE_ACTION === action) {
     const at = argv.indexOf(AGENT_FLAG);
     const agent = (-1 === at ? undefined : argv[at + 1]) ?? DEFAULT_AGENT;
     captureToolCall(agent, await readStdin(), { cwd, env: process.env, now: () => Date.now() });
-    process.stdout.write(toolHookAck(agent));
+    if (HookAction.TOOL === action) process.stdout.write(toolHookAck(agent));
     return 0;
   }
   if (HookAction.EXPORT === action) {
