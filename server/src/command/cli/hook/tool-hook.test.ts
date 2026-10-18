@@ -10,7 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ReticleDir } from '@reticlehq/core';
-import { AGENT_TOOL_RECORD, MAX_TOOL_TEXT, captureToolCall } from './tool-hook.js';
+import {
+  AGENT_MODEL_RECORD,
+  AGENT_TOOL_RECORD,
+  MAX_TOOL_TEXT,
+  captureToolCall,
+  toolHookAck,
+} from './tool-hook.js';
 
 function project(config: Record<string, unknown> = { projectId: 'shop-1' }): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'reticle-tool-hook-')));
@@ -28,8 +34,8 @@ const records = (dir: string): Record<string, unknown>[] => {
   );
 };
 
-const run = (payload: unknown, env: NodeJS.ProcessEnv = {}) =>
-  captureToolCall('claude-code', JSON.stringify(payload), {
+const run = (payload: unknown, env: NodeJS.ProcessEnv = {}, agent = 'claude-code') =>
+  captureToolCall(agent, JSON.stringify(payload), {
     cwd: '/nowhere',
     env,
     now: () => 10_000,
@@ -106,5 +112,100 @@ describe("the coding agent's own tool calls", () => {
     expect(
       captureToolCall('claude-code', 'not json', { cwd: dir, env: {}, now: () => 0 }).written,
     ).toEqual([]);
+  });
+});
+
+/*
+ * Each agent's post-tool payload, as its own documentation gave it on 2026-10-18. The model comes
+ * from the payload where the agent sends it: Claude Code only at session start and on a model
+ * switch, Cursor and Codex on every hook, Gemini CLI nowhere documented.
+ */
+describe('each agent payload, and the model behind it', () => {
+  it("keeps Claude Code's model from session start and from a model switch", () => {
+    const dir = project();
+    run({ hook_event_name: 'SessionStart', session_id: 's', cwd: dir, model: 'claude-x' });
+    run({ hook_event_name: 'PostModelSwitch', session_id: 's', cwd: dir, to_model: 'claude-y' });
+    expect(records(dir)).toMatchObject([
+      { kind: AGENT_MODEL_RECORD, agent: 'claude-code', agentSession: 's', model: 'claude-x' },
+      { kind: AGENT_MODEL_RECORD, model: 'claude-y' },
+    ]);
+  });
+
+  it("reads Cursor's tool output, failure and model", () => {
+    const dir = project();
+    const base = { conversation_id: 'c1', cwd: dir, model: 'cursor-model', tool_name: 'Shell' };
+    run(
+      {
+        ...base,
+        hook_event_name: 'postToolUse',
+        tool_input: { command: 'ls' },
+        tool_output: '{"exitCode":0}',
+        duration: 50,
+      },
+      {},
+      'cursor',
+    );
+    run(
+      {
+        ...base,
+        hook_event_name: 'postToolUseFailure',
+        tool_input: {},
+        error_message: 'timed out',
+        failure_type: 'timeout',
+      },
+      {},
+      'cursor',
+    );
+    expect(records(dir)).toMatchObject([
+      {
+        tool: 'Shell',
+        ok: true,
+        model: 'cursor-model',
+        agentSession: 'c1',
+        result: { head: '{"exitCode":0}' },
+        reportedDuration: 50,
+      },
+      { ok: false, failureType: 'timeout', error: { head: 'timed out' } },
+    ]);
+    expect(toolHookAck('cursor')).toBe('{}\n');
+  });
+
+  it("reads Codex's response and model", () => {
+    const dir = project();
+    run(
+      {
+        session_id: 'x',
+        cwd: dir,
+        model: 'codex-model',
+        tool_name: 'apply_patch',
+        tool_input: { command: 'patch' },
+        tool_response: 'Done',
+      },
+      {},
+      'codex',
+    );
+    expect(records(dir)).toMatchObject([
+      { tool: 'apply_patch', ok: true, model: 'codex-model', result: { head: 'Done' } },
+    ]);
+  });
+
+  it('reads a Gemini CLI tool error from inside its response, and answers with JSON', () => {
+    const dir = project();
+    run(
+      {
+        session_id: 'g',
+        cwd: dir,
+        hook_event_name: 'AfterTool',
+        tool_name: 'run_shell_command',
+        tool_input: { command: 'false' },
+        tool_response: { llmContent: 'x', error: { message: 'exit 1' } },
+      },
+      {},
+      'gemini',
+    );
+    expect(records(dir)).toMatchObject([{ tool: 'run_shell_command', ok: false }]);
+    expect(records(dir)[0]?.['model']).toBeUndefined();
+    expect(toolHookAck('gemini')).toBe('{}\n');
+    expect(toolHookAck('claude-code')).toBe('');
   });
 });

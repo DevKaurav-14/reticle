@@ -24,7 +24,7 @@ import { ReticleEnv } from '@reticlehq/core';
 import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js';
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
-import { captureToolCall } from './tool-hook.js';
+import { captureToolCall, toolHookAck } from './tool-hook.js';
 
 const HookAction = {
   PROMPT: 'prompt',
@@ -172,6 +172,7 @@ export async function handleHook(
     const at = argv.indexOf(AGENT_FLAG);
     const agent = (-1 === at ? undefined : argv[at + 1]) ?? DEFAULT_AGENT;
     captureToolCall(agent, await readStdin(), { cwd, env: process.env, now: () => Date.now() });
+    process.stdout.write(toolHookAck(agent));
     return 0;
   }
   if (HookAction.INSTALL === action) return install(cwd, print);

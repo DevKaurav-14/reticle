@@ -34,7 +34,7 @@ describe('the prompt-capture hook in each agent config', () => {
     expect(
       dig(content(PromptHookAgent.CLAUDE_CODE), 'hooks', 'UserPromptSubmit', 0, 'hooks', 0),
     ).toMatchObject({ type: 'command', command: promptHookCommand(PromptHookAgent.CLAUDE_CODE) });
-    expect(JSON.parse(content(PromptHookAgent.CURSOR)) as unknown).toEqual({
+    expect(JSON.parse(content(PromptHookAgent.CURSOR)) as unknown).toMatchObject({
       version: 1,
       hooks: { beforeSubmitPrompt: [{ command: promptHookCommand(PromptHookAgent.CURSOR) }] },
     });
@@ -177,5 +177,31 @@ describe('the prompt-capture hook in each agent config', () => {
     });
     expect(promptHookInstalled(spec(PromptHookAgent.CLAUDE_CODE), promptOnly)).toBe(false);
     expect(uninstallPromptHook(spec(PromptHookAgent.CLAUDE_CODE), content).content).toBeNull();
+  });
+
+  it('names the model through the events that carry it, and records Codex, Cursor and Gemini calls', () => {
+    const content = (id: string): string => installPromptHook(spec(id), null).content;
+    const claude = content(PromptHookAgent.CLAUDE_CODE);
+    for (const event of ['SessionStart', 'PostModelSwitch']) {
+      expect(dig(claude, 'hooks', event, 0, 'hooks', 0)).toMatchObject({
+        type: 'command',
+        command: toolHookCommand(PromptHookAgent.CLAUDE_CODE),
+        async: true,
+      });
+    }
+    expect(dig(content(PromptHookAgent.CODEX), 'hooks', 'PostToolUse', 0)).toMatchObject({
+      matcher: 'Bash|apply_patch',
+      hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.CODEX), async: true }],
+    });
+    for (const event of ['postToolUse', 'postToolUseFailure']) {
+      expect(dig(content(PromptHookAgent.CURSOR), 'hooks', event, 0)).toEqual({
+        command: toolHookCommand(PromptHookAgent.CURSOR),
+        matcher: 'Shell|Write|Delete',
+      });
+    }
+    expect(dig(content(PromptHookAgent.GEMINI), 'hooks', 'AfterTool', 0)).toEqual({
+      matcher: 'run_shell_command',
+      hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.GEMINI) }],
+    });
   });
 });

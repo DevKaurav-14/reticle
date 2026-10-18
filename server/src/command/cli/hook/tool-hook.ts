@@ -20,6 +20,8 @@ import { captureRoots } from './prompt-hook.js';
 
 /** The `kind` of a record this hook writes, beside the daemon's `start` and `call`. */
 export const AGENT_TOOL_RECORD = 'agent_tool';
+/** The `kind` of a record that only names the agent's model (Claude Code's session start). */
+export const AGENT_MODEL_RECORD = 'agent_model';
 /** A result keeps this many characters; its full size is kept beside it. */
 export const MAX_TOOL_TEXT = 4_000;
 /** One argument string (a whole file a Write sends) keeps this many characters. */
@@ -32,6 +34,8 @@ const JOURNAL_SETTING = 'journal';
 const UNKNOWN_SESSION = 'unknown';
 const AGENT_FILE_PREFIX = 'agent-';
 const BASH = 'Bash';
+const CURSOR = 'cursor';
+const GEMINI = 'gemini';
 
 type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json =>
@@ -67,7 +71,32 @@ function resultOf(
   };
 }
 
-/** One record from a post-tool payload (Claude Code's shape), or undefined when it is not one. */
+/**
+ * The fields each agent names differently, read into one shape. From each vendor's hook reference
+ * on 2026-10-18: Claude Code (`tool_response`, `error`, `duration_ms`, `session_id`), Cursor
+ * (`tool_output`, `error_message`, `failure_type`, `duration` with no stated unit,
+ * `conversation_id`, `model` on every hook), Codex (`tool_response`, `model` on every hook) and
+ * Gemini CLI (`tool_response` with an optional `error` inside it; no model).
+ */
+function readPayload(payload: Json): {
+  session: string | undefined;
+  model: string | undefined;
+  response: unknown;
+  error: string | undefined;
+} {
+  const response = payload['tool_response'] ?? payload['tool_output'];
+  const inner = isObject(response) ? response['error'] : undefined;
+  const innerError = text(inner) ?? (isObject(inner) ? text(inner['message']) : undefined);
+  return {
+    session: text(payload['session_id']) ?? text(payload['conversation_id']),
+    // `to_model` is Claude Code's PostModelSwitch; `model` is everyone else's.
+    model: text(payload['model']) ?? text(payload['to_model']),
+    response,
+    error: text(payload['error']) ?? text(payload['error_message']) ?? innerError,
+  };
+}
+
+/** One record from a post-tool payload, or from a payload that only names the model. */
 export function toolRecordFrom(
   agent: string,
   payload: unknown,
@@ -75,28 +104,38 @@ export function toolRecordFrom(
   base: string,
 ): Json | undefined {
   if (!isObject(payload)) return undefined;
+  const { session, model, response, error } = readPayload(payload);
+  const who = {
+    v: EPISODE_FILE_VERSION,
+    agent,
+    ...(session === undefined ? {} : { agentSession: session }),
+    ...(model === undefined ? {} : { model }),
+  };
   const tool = text(payload['tool_name']);
-  if (tool === undefined || RETICLE_TOOL.test(tool)) return undefined;
-  const error = text(payload['error']);
+  if (tool === undefined) {
+    // Claude Code names its model only at session start and on a switch, with no tool.
+    return model === undefined ? undefined : { ...who, kind: AGENT_MODEL_RECORD, at: now };
+  }
+  if (RETICLE_TOOL.test(tool)) return undefined;
   const ok = error === undefined;
   const duration = payload['duration_ms'];
   const durationMs = 'number' === typeof duration && duration >= 0 ? duration : undefined;
+  const reported = payload['duration'];
   const exit = error === undefined ? undefined : EXIT_CODE.exec(error)?.[1];
   const cut = { any: false };
   const args = redacted(payload['tool_input'] ?? {}, cut, base);
   return {
-    v: EPISODE_FILE_VERSION,
+    ...who,
     kind: AGENT_TOOL_RECORD,
-    agent,
-    ...(text(payload['session_id']) === undefined ? {} : { agentSession: payload['session_id'] }),
     ...(text(payload['tool_use_id']) === undefined ? {} : { toolUseId: payload['tool_use_id'] }),
     tool,
     args,
     ...(cut.any ? { argsTruncated: true } : {}),
     ok,
-    ...(ok
-      ? { result: resultOf(payload['tool_response'], base) }
-      : { error: resultOf(error, base) }),
+    ...(ok ? { result: resultOf(response, base) } : { error: resultOf(error, base) }),
+    ...(text(payload['failure_type']) === undefined
+      ? {}
+      : { failureType: payload['failure_type'] }),
     ...(exit !== undefined
       ? { exitCode: Number(exit) }
       : ok && BASH === tool
@@ -104,8 +143,15 @@ export function toolRecordFrom(
         : {}),
     ...(true === payload['is_interrupt'] ? { interrupted: true } : {}),
     ...(durationMs === undefined ? {} : { startedAt: now - durationMs, durationMs }),
+    // A duration whose unit the vendor does not state is kept as given, never converted.
+    ...('number' === typeof reported ? { reportedDuration: reported } : {}),
     endedAt: now,
   };
+}
+
+/** What the hook prints. Cursor and Gemini CLI read stdout as JSON; the rest need nothing. */
+export function toolHookAck(agent: string): string {
+  return CURSOR === agent || GEMINI === agent ? '{}\n' : '';
 }
 
 interface CaptureIo {
@@ -120,10 +166,11 @@ export function captureToolCall(agent: string, raw: string, io: CaptureIo): { wr
     if (OFF_VALUES.has((io.env[ReticleEnv.JOURNAL] ?? '').toLowerCase())) return { written: [] };
     const payload: unknown = JSON.parse(raw);
     if (!isObject(payload)) return { written: [] };
-    const cwd = text(payload['cwd']) ?? io.cwd;
+    const roots = Array.isArray(payload['workspace_roots']) ? payload['workspace_roots'] : [];
+    const cwd = text(payload['cwd']) ?? text(roots[0]) ?? io.cwd;
     const record = toolRecordFrom(agent, payload, io.now(), cwd);
     if (record === undefined) return { written: [] };
-    const session = (text(payload['session_id']) ?? UNKNOWN_SESSION).replace(/[^\w-]/g, '_');
+    const session = (readPayload(payload).session ?? UNKNOWN_SESSION).replace(/[^\w-]/g, '_');
     const line = `${JSON.stringify(record)}\n`;
     const written: string[] = [];
     for (const root of captureRoots(cwd)) {

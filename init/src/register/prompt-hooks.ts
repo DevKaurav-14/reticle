@@ -77,6 +77,38 @@ const postToolGroup = (command: string): Record<string, unknown> => ({
   hooks: [{ type: 'command', command, async: true }],
 });
 
+/** Claude Code names the model only at SessionStart (`model`) and on PostModelSwitch (`to_model`). */
+const modelGroup = (command: string): Record<string, unknown> => ({
+  hooks: [{ type: 'command', command, async: true }],
+});
+
+/**
+ * Codex's post-tool entry: the tool names its reference gives (`Bash`, `apply_patch`), and `async`,
+ * which it documents for command hooks (2026-10-18).
+ */
+const codexPostTool = (command: string): Record<string, unknown> => ({
+  matcher: 'Bash|apply_patch',
+  hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_S, async: true }],
+});
+
+/**
+ * Cursor's post-tool entry, for the tool names its reference lists (`Shell`, `Write`, `Delete`).
+ * Cursor documents no background option, so the agent may wait for each run.
+ */
+const cursorPostTool = (command: string): Record<string, unknown> => ({
+  command,
+  matcher: 'Shell|Write|Delete',
+});
+
+/**
+ * Gemini CLI's AfterTool entry, for the one built-in tool name its reference gives
+ * (`run_shell_command`). No background option is documented, and no timeout: the unit is unsettled.
+ */
+const geminiAfterTool = (command: string): Record<string, unknown> => ({
+  matcher: 'run_shell_command',
+  hooks: [{ type: 'command', command }],
+});
+
 /** One place in the config that holds a list of hook entries, and the entry we add to it. */
 interface HookSlot {
   /** Keys from the top of the file down to the list. */
@@ -122,6 +154,9 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
       // The agent's own tool calls, after they ran or failed (2026-10-18).
       { path: ['hooks', 'PostToolUse'], entry: postToolGroup, command: toolHookCommand },
       { path: ['hooks', 'PostToolUseFailure'], entry: postToolGroup, command: toolHookCommand },
+      // The model, which no other Claude Code event carries.
+      { path: ['hooks', 'SessionStart'], entry: modelGroup, command: toolHookCommand },
+      { path: ['hooks', 'PostModelSwitch'], entry: modelGroup, command: toolHookCommand },
     ],
     projectMarkers: ['.claude'],
     homeMarkers: ['.claude'],
@@ -133,7 +168,11 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     paths: ['.cursor/hooks.json'],
     defaultPath: '.cursor/hooks.json',
     header: { version: 1 },
-    slots: [{ path: ['hooks', 'beforeSubmitPrompt'], entry: (command) => ({ command }) }],
+    slots: [
+      { path: ['hooks', 'beforeSubmitPrompt'], entry: (command) => ({ command }) },
+      { path: ['hooks', 'postToolUse'], entry: cursorPostTool, command: toolHookCommand },
+      { path: ['hooks', 'postToolUseFailure'], entry: cursorPostTool, command: toolHookCommand },
+    ],
     projectMarkers: ['.cursor'],
     homeMarkers: ['.cursor'],
     docs: 'https://cursor.com/docs/agent/hooks',
@@ -143,7 +182,10 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     label: 'Codex CLI',
     paths: ['.codex/hooks.json'],
     defaultPath: '.codex/hooks.json',
-    slots: [{ path: ['hooks', 'UserPromptSubmit'], entry: group }],
+    slots: [
+      { path: ['hooks', 'UserPromptSubmit'], entry: group },
+      { path: ['hooks', 'PostToolUse'], entry: codexPostTool, command: toolHookCommand },
+    ],
     projectMarkers: ['.codex'],
     homeMarkers: ['.codex'],
     docs: 'https://learn.chatgpt.com/docs/hooks',
@@ -159,6 +201,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
         path: ['hooks', 'BeforeAgent'],
         entry: (command) => ({ matcher: '*', hooks: [{ type: 'command', command }] }),
       },
+      { path: ['hooks', 'AfterTool'], entry: geminiAfterTool, command: toolHookCommand },
     ],
     projectMarkers: ['.gemini'],
     // The settings FILE: Antigravity shares `~/.gemini` and has no prompt hook.
