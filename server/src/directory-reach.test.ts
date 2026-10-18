@@ -374,7 +374,9 @@ const REACHES_FOR: Record<string, readonly string[]> = {
   // `dir` for DRIVE_RECORD_SUFFIX, as `telemetry` below: the unsent-run count read a refused
   // drive's `.drive.json` as a run, so `reticle sync` and the dashboard asked for a sync that had
   // nothing to send, forever.
-  cloud: ['cli', 'dir', 'fs', 'hooks', 'intent'],
+  // `journal` for the agent hooks' records a synced run takes its model and closing claim from.
+  // `journal` imports nothing from `cloud`, so this adds no mutual pair.
+  cloud: ['cli', 'dir', 'fs', 'hooks', 'intent', 'journal'],
   command: [
     'answers',
     // `reticle hook`, dispatched first in `cli.ts` so that telemetry never sees a prompt.

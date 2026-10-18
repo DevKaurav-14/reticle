@@ -15,15 +15,19 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ReticleDir, ReticleEnv } from '@reticlehq/core';
 import { projectSetting, redactSecrets } from '@/memory/intent/record-request.js';
-import { EPISODE_FILE_VERSION } from '@/memory/journal/episode-log.js';
+import {
+  AGENT_FILE_PREFIX,
+  AgentRecordKind,
+  EPISODE_FILE_VERSION,
+} from '@/memory/journal/episode-log.js';
 import { captureRoots } from './prompt-hook.js';
 
 /** The `kind` of a record this hook writes, beside the daemon's `start` and `call`. */
-export const AGENT_TOOL_RECORD = 'agent_tool';
+export const AGENT_TOOL_RECORD = AgentRecordKind.TOOL;
 /** The `kind` of a record that only names the agent's model (Claude Code's session start). */
-export const AGENT_MODEL_RECORD = 'agent_model';
+export const AGENT_MODEL_RECORD = AgentRecordKind.MODEL;
 /** The `kind` of the agent's closing message at the end of a turn. */
-export const AGENT_STOP_RECORD = 'agent_stop';
+export const AGENT_STOP_RECORD = AgentRecordKind.STOP;
 
 /**
  * The end-of-turn events whose payload carries the final message, and the field that holds it,
@@ -50,7 +54,6 @@ const EXIT_CODE = /^Exit code (\d+)/;
 const OFF_VALUES: ReadonlySet<string> = new Set(['0', 'false', 'off', 'no']);
 const JOURNAL_SETTING = 'journal';
 const UNKNOWN_SESSION = 'unknown';
-const AGENT_FILE_PREFIX = 'agent-';
 const BASH = 'Bash';
 const COPILOT_SUCCESS = 'success';
 const UNKNOWN_MODEL = 'Unknown';

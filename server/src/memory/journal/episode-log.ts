@@ -16,7 +16,7 @@
  */
 import { execFile } from 'node:child_process';
 import { appendFile, mkdir } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { ReticleDir, type DrivenBy, type ReticleEvent } from '@reticlehq/core';
@@ -254,4 +254,88 @@ export function episodesMaySync(
   workspaceConsent: boolean | undefined,
 ): boolean {
   return null !== cloud.config && true === cloud.policy.episodes && true === workspaceConsent;
+}
+
+/** The record kinds the agent hooks write beside the daemon's (`reticle hook tool`). */
+export const AgentRecordKind = {
+  TOOL: 'agent_tool',
+  MODEL: 'agent_model',
+  STOP: 'agent_stop',
+} as const;
+/** An agent hook's file: `agent-<session>.jsonl`, beside the daemon's episodes. */
+export const AGENT_FILE_PREFIX = 'agent-';
+
+type Json = Record<string, unknown>;
+const isJson = (value: unknown): value is Json =>
+  'object' === typeof value && null !== value && !Array.isArray(value);
+
+function readLines(path: string): Json[] {
+  try {
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .flatMap((line) => {
+        try {
+          const parsed: unknown = JSON.parse(line);
+          return isJson(parsed) ? [parsed] : [];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** The same agent: a hook names it `cursor`, an MCP handshake `cursor-vscode`. */
+const sameAgent = (hook: unknown, run: string): boolean => {
+  if ('string' !== typeof hook || 0 === hook.length) return false;
+  const a = hook.toLowerCase();
+  const b = run.toLowerCase();
+  return a.includes(b) || b.includes(a);
+};
+
+/**
+ * The agent's model and the claim that closed the run's turn, from the agent hooks' records in
+ * this project's episodes. The turn is the run's: its claim is the first `agent_stop` of the same
+ * agent at or after the run's last Reticle call (from its episode, else its `createdAt`); a later
+ * stop belongs to a later turn. The model is the newest `agent_model` record of that agent, or
+ * the `model` a tool or stop record carried, at or before that point.
+ */
+export function agentContextFor(
+  root: string,
+  run: { episodeId?: unknown; createdAt?: unknown; agent?: unknown },
+): { model?: string; claim?: { text: string; at: number } } {
+  const agentId = isJson(run.agent) ? run.agent['id'] : undefined;
+  if ('string' !== typeof agentId) return {};
+  const dir = join(root, ReticleDir.EPISODES_SUBDIR);
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return {};
+  }
+  const calls =
+    'string' === typeof run.episodeId ? readLines(join(dir, `${run.episodeId}.jsonl`)) : [];
+  const ends = calls.map((c) => c['endedAt']).filter((t): t is number => 'number' === typeof t);
+  const lastCall =
+    0 < ends.length ? Math.max(...ends) : 'number' === typeof run.createdAt ? run.createdAt : 0;
+  const records = files
+    .filter((file) => file.startsWith(AGENT_FILE_PREFIX))
+    .flatMap((file) => readLines(join(dir, file)))
+    .filter((r) => sameAgent(r['agent'], agentId))
+    .map((r) => ({ r, at: 'number' === typeof r['at'] ? r['at'] : Number(r['endedAt'] ?? 0) }))
+    .sort((a, b) => a.at - b.at);
+  const stop = records.find(({ r, at }) => AgentRecordKind.STOP === r['kind'] && at >= lastCall);
+  const until = stop?.at ?? lastCall;
+  const model = records
+    .filter(({ r, at }) => at <= until && 'string' === typeof r['model'])
+    .map(({ r }) => r['model'] as string)
+    .at(-1);
+  const message = isJson(stop?.r['message']) ? stop?.r['message']['head'] : undefined;
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(stop === undefined || 'string' !== typeof message
+      ? {}
+      : { claim: { text: message, at: stop.at } }),
+  };
 }
