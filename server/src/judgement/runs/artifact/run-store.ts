@@ -6,6 +6,8 @@
  * needs no clock.
  */
 
+import { callingAttachId } from '@/hooks/coding-agents.js';
+import { episodeStampFor } from '@/hooks/episode-stamp.js';
 import {
   asRunId,
   ReticleVerificationRunSchema,
@@ -97,6 +99,16 @@ export class RunStore {
       (await this.#recentRequest(run.createdAt, run.runId)) ??
       (await this.#heldContext(run.runId));
     if (context !== undefined) run = { ...run, context };
+    // The episode this run came from, and the commit it ran against, so it joins exactly.
+    const episode = episodeStampFor(this.#root, callingAttachId());
+    if (episode !== undefined) {
+      const commit = run.project.commit ?? episode.head;
+      run = {
+        ...run,
+        episodeId: episode.episodeId,
+        project: { ...run.project, ...(commit === undefined ? {} : { commit }) },
+      };
+    }
     // The step screenshots taken for this run, the last of which may still be landing.
     await shotsLanded(this.#root, run.runId);
     run = withScreenshots(run, await readStepShots(this.#fs, this.#root, run.runId));

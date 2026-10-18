@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EventType, REDACTED_VALUE, ReticleDir, type ReticleEvent } from '@reticlehq/core';
+import { episodeStampFor } from '@/hooks/episode-stamp.js';
 import {
   EPISODE_FILE_VERSION,
   EpisodeRecordKind,
@@ -102,6 +103,11 @@ describe('the episode log', () => {
     expect((act?.['effect'] as { events: unknown[] }).events).toHaveLength(2);
     expect(snap).toMatchObject({ n: 2, tool: 'reticle_snapshot', error: 'no session' });
     expect(snap?.['effect']).toBeUndefined();
+    // A run written in this project now names this episode and its HEAD.
+    expect(episodeStampFor(reticleRoot, 'attach-1')).toEqual({
+      episodeId: 'attach-1',
+      head: 'abc123',
+    });
   });
 
   it('never keeps a typed value, the same rule as the journal', async () => {

@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import { ReticleDir, type DrivenBy, type ReticleEvent } from '@reticlehq/core';
 import { PromptContextSchema, type PromptContext } from '@reticlehq/core/artifacts';
 import { withoutTypedInput } from './journal-recorder.js';
+import { noteEpisode } from '@/hooks/episode-stamp.js';
 
 const run = promisify(execFile);
 
@@ -157,6 +158,7 @@ export function createEpisodeLog(deps: EpisodeLogDeps): EpisodeLog {
   return {
     record: (call) => {
       if (false === deps.enabled) return;
+      noteEpisode(deps.root, deps.episodeId);
       n += 1;
       if (1 === n) {
         // The start is taken at the first call: that is when the agent began working through us.
@@ -170,7 +172,10 @@ export function createEpisodeLog(deps: EpisodeLogDeps): EpisodeLog {
             episodeId: deps.episodeId,
             at,
             ...(call.agent === undefined ? {} : { agent: call.agent }),
-            git: await git(dirname(deps.root)),
+            git: await git(dirname(deps.root)).then((found) => {
+              if ('head' in found) noteEpisode(deps.root, deps.episodeId, found.head);
+              return found;
+            }),
             ...(request === undefined ? {} : { request }),
           };
         });
