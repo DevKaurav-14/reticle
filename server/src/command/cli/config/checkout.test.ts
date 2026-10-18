@@ -22,7 +22,8 @@ describe('worktreeTwins', () => {
   let main: string;
 
   beforeEach(() => {
-    dir = realpathSync(mkdtempSync(join(tmpdir(), 'reticle-twins-')));
+    // The long form: git writes worktree paths that way, and Windows temp paths can be short (`RUNNER~1`).
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'reticle-twins-')));
     main = join(dir, 'main');
     git(dir, 'init', '-q', '-b', 'main', main);
     mkdirSync(join(main, 'apps', 'web'), { recursive: true });

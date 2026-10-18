@@ -2,7 +2,7 @@
  * The git checkout a directory is in, read from disk. The rule is core's `checkoutOf`; this file
  * only supplies the reads, so every server module asks the same question the same way.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { checkoutOf, samePath, type Checkout } from '@reticlehq/core';
 
@@ -10,6 +10,18 @@ import { checkoutOf, samePath, type Checkout } from '@reticlehq/core';
 const WORKTREES_DIR = 'worktrees';
 /** The file in that folder that names the worktree's `.git`. */
 const GITDIR_FILE = 'gitdir';
+
+/**
+ * The long form of a path. Windows can spell one folder two ways (`RUNNER~1` and `runneradmin`), and
+ * git writes the long one, so a short-form caller was named as its own twin.
+ */
+const longForm = (path: string): string => {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+};
 
 const readOrUndefined = (path: string): string | undefined => {
   try {
@@ -52,7 +64,10 @@ export function worktreeTwins(directory: string): string[] {
   if (from === undefined) return [];
   const rel = relative(from.root, directory);
   const roots = new Set([from.mainRoot, ...linkedWorktreeRoots(from.commonDir)]);
-  return [...roots].filter((root) => !samePath(root, from.root)).map((root) => join(root, rel));
+  const self = longForm(from.root);
+  return [...roots]
+    .filter((root) => !samePath(longForm(root), self))
+    .map((root) => join(root, rel));
 }
 
 /** True when the repository whose git directory is `commonDir` has a linked worktree. One read. */
