@@ -204,4 +204,25 @@ describe('the prompt-capture hook in each agent config', () => {
       hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.GEMINI) }],
     });
   });
+
+  it('records Windsurf, Copilot CLI and Factory Droid tool calls in their documented shapes', () => {
+    const content = (id: string): string => installPromptHook(spec(id), null).content;
+    const windsurf = content(PromptHookAgent.WINDSURF);
+    for (const event of ['post_run_command', 'post_write_code']) {
+      expect(dig(windsurf, 'hooks', event, 0)).toEqual({
+        command: toolHookCommand(PromptHookAgent.WINDSURF),
+      });
+    }
+    expect(dig(content(PromptHookAgent.COPILOT), 'hooks', 'postToolUse', 0)).toEqual({
+      type: 'command',
+      bash: toolHookCommand(PromptHookAgent.COPILOT),
+      powershell: toolHookCommand(PromptHookAgent.COPILOT),
+      timeoutSec: 30,
+      matcher: 'bash|edit',
+    });
+    expect(dig(content(PromptHookAgent.FACTORY), 'PostToolUse', 0)).toEqual({
+      matcher: 'Execute|Edit|ApplyPatch|Create|FetchUrl|WebSearch',
+      hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.FACTORY), timeout: 30 }],
+    });
+  });
 });

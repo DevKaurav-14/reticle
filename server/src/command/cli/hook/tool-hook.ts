@@ -34,6 +34,8 @@ const JOURNAL_SETTING = 'journal';
 const UNKNOWN_SESSION = 'unknown';
 const AGENT_FILE_PREFIX = 'agent-';
 const BASH = 'Bash';
+const COPILOT_SUCCESS = 'success';
+const UNKNOWN_MODEL = 'Unknown';
 
 type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json =>
@@ -79,18 +81,40 @@ function resultOf(
 function readPayload(payload: Json): {
   session: string | undefined;
   model: string | undefined;
+  tool: string | undefined;
+  input: unknown;
   response: unknown;
   error: string | undefined;
 } {
-  const response = payload['tool_response'] ?? payload['tool_output'];
+  // Copilot CLI's camelCase result: `{ resultType, textResultForLlm }`, a failure unless `success`.
+  const copilot = isObject(payload['toolResult']) ? payload['toolResult'] : undefined;
+  const response = payload['tool_response'] ?? payload['tool_output'] ?? copilot;
   const inner = isObject(response) ? response['error'] : undefined;
   const innerError = text(inner) ?? (isObject(inner) ? text(inner['message']) : undefined);
+  const copilotError =
+    copilot !== undefined && COPILOT_SUCCESS !== copilot['resultType']
+      ? (text(copilot['textResultForLlm']) ?? String(copilot['resultType']))
+      : undefined;
+  // Windsurf names the action, not a tool, and says "Unknown" when it does not know the model.
+  const windsurfModel = text(payload['model_name']);
+  const windsurfTool = isObject(payload['tool_info'])
+    ? text(payload['agent_action_name'])
+    : undefined;
   return {
-    session: text(payload['session_id']) ?? text(payload['conversation_id']),
+    session:
+      text(payload['session_id']) ??
+      text(payload['conversation_id']) ??
+      text(payload['sessionId']) ??
+      text(payload['trajectory_id']),
     // `to_model` is Claude Code's PostModelSwitch; `model` is everyone else's.
-    model: text(payload['model']) ?? text(payload['to_model']),
+    model:
+      text(payload['model']) ??
+      text(payload['to_model']) ??
+      (UNKNOWN_MODEL === windsurfModel ? undefined : windsurfModel),
+    tool: text(payload['tool_name']) ?? text(payload['toolName']) ?? windsurfTool,
+    input: payload['tool_input'] ?? payload['toolArgs'] ?? payload['tool_info'] ?? {},
     response,
-    error: text(payload['error']) ?? text(payload['error_message']) ?? innerError,
+    error: text(payload['error']) ?? text(payload['error_message']) ?? innerError ?? copilotError,
   };
 }
 
@@ -102,14 +126,13 @@ export function toolRecordFrom(
   base: string,
 ): Json | undefined {
   if (!isObject(payload)) return undefined;
-  const { session, model, response, error } = readPayload(payload);
+  const { session, model, tool, input, response, error } = readPayload(payload);
   const who = {
     v: EPISODE_FILE_VERSION,
     agent,
     ...(session === undefined ? {} : { agentSession: session }),
     ...(model === undefined ? {} : { model }),
   };
-  const tool = text(payload['tool_name']);
   if (tool === undefined) {
     // Claude Code names its model only at session start and on a switch, with no tool.
     return model === undefined ? undefined : { ...who, kind: AGENT_MODEL_RECORD, at: now };
@@ -121,7 +144,7 @@ export function toolRecordFrom(
   const reported = payload['duration'];
   const exit = error === undefined ? undefined : EXIT_CODE.exec(error)?.[1];
   const cut = { any: false };
-  const args = redacted(payload['tool_input'] ?? {}, cut, base);
+  const args = redacted(input, cut, base);
   return {
     ...who,
     kind: AGENT_TOOL_RECORD,
@@ -130,7 +153,12 @@ export function toolRecordFrom(
     args,
     ...(cut.any ? { argsTruncated: true } : {}),
     ok,
-    ...(ok ? { result: resultOf(response, base) } : { error: resultOf(error, base) }),
+    // A payload that carries no result (Windsurf's) gets none: an invented `null` reads as an answer.
+    ...(ok
+      ? response === undefined
+        ? {}
+        : { result: resultOf(response, base) }
+      : { error: resultOf(error, base) }),
     ...(text(payload['failure_type']) === undefined
       ? {}
       : { failureType: payload['failure_type'] }),
@@ -162,7 +190,10 @@ export function captureToolCall(agent: string, raw: string, io: CaptureIo): { wr
     const payload: unknown = JSON.parse(raw);
     if (!isObject(payload)) return { written: [] };
     const roots = Array.isArray(payload['workspace_roots']) ? payload['workspace_roots'] : [];
-    const cwd = text(payload['cwd']) ?? text(roots[0]) ?? io.cwd;
+    // Windsurf puts the folder inside `tool_info` for a command, and nowhere for an edit: its hook
+    // runs in the workspace root, which is `io.cwd`.
+    const info = isObject(payload['tool_info']) ? payload['tool_info'] : {};
+    const cwd = text(payload['cwd']) ?? text(roots[0]) ?? text(info['cwd']) ?? io.cwd;
     const record = toolRecordFrom(agent, payload, io.now(), cwd);
     if (record === undefined) return { written: [] };
     const session = (readPayload(payload).session ?? UNKNOWN_SESSION).replace(/[^\w-]/g, '_');

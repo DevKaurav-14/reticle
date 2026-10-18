@@ -208,4 +208,100 @@ describe('each agent payload, and the model behind it', () => {
     expect(toolHookAck('gemini')).toBe('{}\n');
     expect(toolHookAck('claude-code')).toBe('');
   });
+
+  it("reads Windsurf's action, Copilot CLI's camelCase payload and Factory Droid's", () => {
+    const dir = project();
+    run(
+      {
+        agent_action_name: 'post_run_command',
+        trajectory_id: 't1',
+        execution_id: 'x',
+        timestamp: '2026-10-18T00:00:00Z',
+        model_name: 'windsurf-model',
+        tool_info: { command_line: 'npm test', cwd: dir },
+      },
+      {},
+      'windsurf',
+    );
+    // Windsurf's hook runs in the workspace root, and an edit names no folder of its own.
+    captureToolCall(
+      'windsurf',
+      JSON.stringify({
+        agent_action_name: 'post_write_code',
+        trajectory_id: 't1',
+        model_name: 'Unknown',
+        tool_info: { file_path: `${dir}/a.ts`, edits: [] },
+      }),
+      { cwd: dir, env: {}, now: () => 10_000 },
+    );
+    run(
+      {
+        sessionId: 'cp',
+        cwd: dir,
+        toolName: 'bash',
+        toolArgs: { command: 'ls' },
+        toolResult: { resultType: 'success', textResultForLlm: 'a.ts' },
+      },
+      {},
+      'copilot',
+    );
+    run(
+      {
+        session_id: 'fd',
+        cwd: dir,
+        tool_name: 'Execute',
+        tool_input: { command: 'ls' },
+        tool_response: { output: 'a.ts' },
+      },
+      {},
+      'factory-droid',
+    );
+    const [copilot, factory, ws, write] = records(dir).sort(
+      (a, b) =>
+        String(a['agent']).localeCompare(String(b['agent'])) ||
+        Number(a['endedAt']) - Number(b['endedAt']),
+    );
+    expect(copilot).toMatchObject({
+      agent: 'copilot',
+      agentSession: 'cp',
+      tool: 'bash',
+      ok: true,
+      args: { command: 'ls' },
+      result: { head: '{"resultType":"success","textResultForLlm":"a.ts"}' },
+    });
+    expect(factory).toMatchObject({
+      agent: 'factory-droid',
+      agentSession: 'fd',
+      tool: 'Execute',
+      ok: true,
+    });
+    expect(ws).toMatchObject({
+      agent: 'windsurf',
+      agentSession: 't1',
+      tool: 'post_run_command',
+      model: 'windsurf-model',
+      args: { command_line: 'npm test' },
+    });
+    // Windsurf says "Unknown" when it does not know the model: that is not a model.
+    expect(write).toMatchObject({ tool: 'post_write_code', args: { file_path: 'a.ts' } });
+    expect(write?.['model']).toBeUndefined();
+    // Windsurf sends no result: none is invented.
+    expect(ws?.['result']).toBeUndefined();
+  });
+
+  it('reads a Copilot CLI result that is not a success as a failure', () => {
+    const dir = project();
+    run(
+      {
+        sessionId: 'cp',
+        cwd: dir,
+        toolName: 'edit',
+        toolArgs: {},
+        toolResult: { resultType: 'failure', textResultForLlm: 'no such file' },
+      },
+      {},
+      'copilot',
+    );
+    expect(records(dir)).toMatchObject([{ ok: false, error: { head: 'no such file' } }]);
+  });
 });

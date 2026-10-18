@@ -104,6 +104,28 @@ const cursorPostTool = (command: string): Record<string, unknown> => ({
  * Gemini CLI's AfterTool entry, for the one built-in tool name its reference gives
  * (`run_shell_command`). No background option is documented, and no timeout: the unit is unsettled.
  */
+/** Windsurf's post-action entry: the same `{ command }` its prompt hook takes (2026-10-18). */
+const windsurfPost = (command: string): Record<string, unknown> => ({ command });
+
+/**
+ * Copilot CLI's `postToolUse` entry. `matcher` is a full-match regex on `toolName`; `bash` and
+ * `edit` are the names its reference shows (2026-10-18). VS Code reads `PostToolUse` from the same
+ * file, but its reference gives no input fields, so nothing is written for it.
+ */
+const copilotPostTool = (command: string): Record<string, unknown> => ({
+  type: 'command',
+  bash: command,
+  powershell: command,
+  timeoutSec: HOOK_TIMEOUT_S,
+  matcher: 'bash|edit',
+});
+
+/** Factory Droid's `PostToolUse` entry, for its documented shell, edit and web tool names. */
+const factoryPostTool = (command: string): Record<string, unknown> => ({
+  matcher: 'Execute|Edit|ApplyPatch|Create|FetchUrl|WebSearch',
+  hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_S }],
+});
+
 const geminiAfterTool = (command: string): Record<string, unknown> => ({
   matcher: 'run_shell_command',
   hooks: [{ type: 'command', command }],
@@ -214,7 +236,11 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     // The current layout first; the legacy file is read when the current one is absent.
     paths: ['.devin/hooks.json', '.windsurf/hooks.json'],
     defaultPath: '.windsurf/hooks.json',
-    slots: [{ path: ['hooks', 'pre_user_prompt'], entry: (command) => ({ command }) }],
+    slots: [
+      { path: ['hooks', 'pre_user_prompt'], entry: (command) => ({ command }) },
+      { path: ['hooks', 'post_run_command'], entry: windsurfPost, command: toolHookCommand },
+      { path: ['hooks', 'post_write_code'], entry: windsurfPost, command: toolHookCommand },
+    ],
     projectMarkers: ['.windsurf', '.devin'],
     homeMarkers: ['.codeium/windsurf'],
     docs: 'https://docs.devin.ai/desktop/cascade/hooks.md',
@@ -240,6 +266,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
           timeoutSec: HOOK_TIMEOUT_S,
         }),
       },
+      { path: ['hooks', 'postToolUse'], entry: copilotPostTool, command: toolHookCommand },
     ],
     projectMarkers: ['.github/hooks', '.vscode'],
     homeMarkers: ['.copilot', '.vscode'],
@@ -251,7 +278,10 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     paths: ['.factory/hooks.json'],
     defaultPath: '.factory/hooks.json',
     // The events sit at the top of this file, with no `hooks` key around them.
-    slots: [{ path: ['UserPromptSubmit'], entry: group }],
+    slots: [
+      { path: ['UserPromptSubmit'], entry: group },
+      { path: ['PostToolUse'], entry: factoryPostTool, command: toolHookCommand },
+    ],
     projectMarkers: ['.factory'],
     homeMarkers: ['.factory'],
     docs: 'https://docs.factory.com/reference/hooks-reference.md',
