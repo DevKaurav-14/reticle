@@ -13,6 +13,7 @@ import {
   DEFAULT_ASSERT_TIMEOUT_MS,
   PredicateKind,
   Verified,
+  checkIntent,
 } from '@reticlehq/core';
 import { ReticleTool } from '@reticlehq/core';
 import {
@@ -77,7 +78,10 @@ import {
   inlineVerdictId,
   linkInlineIntent,
 } from '@/memory/intent/inline-intent.js';
-import { bodiesNotCaptured } from '@reticlehq/engine/evidence/uncaptured-bodies.js';
+import {
+  bodiesNotCaptured,
+  captureProvedOn,
+} from '@reticlehq/engine/evidence/uncaptured-bodies.js';
 import { bodyIsEvidence, type BodyMode } from '@reticlehq/engine/window/body-relevance.js';
 import { foldAssetNoise } from '@reticlehq/engine/window/asset-noise.js';
 import { bodyClauseRefusal } from '@reticlehq/engine/evidence/body-capture-remedy.js';
@@ -643,6 +647,8 @@ export const OBSERVE_TOOLS: ToolDef[] = [
       session.recordAction(ReticleTool.ASSERT, asRecord(args), {
         ...verdictEffect,
         ...checkWords(verdict),
+        // A person's sentence for the check, and the part of an allOf that failed.
+        ...checkIntent(predicate, verdict, asString(args['intent'])),
       });
       // A passing check over the default window (since the last act) is proof of that act, so it
       // joins that step in the recording — otherwise "act, then assert" saves a bare click. An
@@ -833,7 +839,9 @@ export const OBSERVE_TOOLS: ToolDef[] = [
           {
             calls: listed,
             ...(droppedOldest > 0 ? { total: matched.length, droppedOldest } : {}),
-            ...('none' !== bodyMode ? bodiesNotCaptured(calls, session.sdkVersion) : {}),
+            ...('none' !== bodyMode
+              ? bodiesNotCaptured(calls, session.sdkVersion, captureProvedOn(matched))
+              : {}),
             /*
              * Never silent. The agent has to be able to tell "this call had no body" from "the body
              * is here and you were not shown it", and to know the exact way to get it — otherwise

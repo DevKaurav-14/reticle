@@ -361,7 +361,10 @@ export class Reticle {
   #actHandle: LogHandle | undefined;
 
   connect(options: ReticleConnectOptions = {}): void {
-    if (this.#connected) return;
+    if (this.#connected) {
+      this.#adoptLateProjectId(options);
+      return;
+    }
     if ('undefined' === typeof window || 'undefined' === typeof document) return;
 
     // Dev-only backstop: refuse to activate in a production build (SSR healthcheck, prod bundle opened
@@ -779,6 +782,21 @@ export class Reticle {
   #applyRedaction(config: RedactionConfig | undefined): void {
     setActiveRedactionPolicy(buildRedactionPolicy(config, nativeWarn));
     this.#redactKeys = wireRedactionKeys(config);
+  }
+
+  /**
+   * An app that calls `connect()` itself runs before the build plugin's injected
+   * `connect({ projectId })`, so the first HELLO went without an id and every session of that app
+   * landed in `unmatched/`. A later call that names a project this page has not announced announces
+   * it now. A page that already declared a project keeps it: a second, different id is not a reason
+   * to move a live session's evidence.
+   */
+  #adoptLateProjectId(options: ReticleConnectOptions): void {
+    if (this.#projectId !== undefined) return;
+    const late = resolveConnectIdentity(options, window.location.search).projectId;
+    if (late === undefined) return;
+    this.#projectId = late;
+    this.#transport?.reannounce();
   }
 
   #hello(): HelloMessage {

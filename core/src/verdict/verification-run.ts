@@ -275,6 +275,11 @@ export const STEP_SCREENSHOT = {
   MAX_PER_RUN: 300,
   /** The platform refuses an image larger than this, decoded. */
   MAX_BYTES: 1.5 * 1024 * 1024,
+  /**
+   * The `tool` of a frame: a picture taken between steps while Reticle drives a tab, about once a
+   * second. Frames share the run's `seq`, so the shots in `seq` order play the run as a film.
+   */
+  FRAME_TOOL: 'frame',
 } as const;
 
 /** One step's screenshot as a run artifact records it. `file` is relative to the run's directory. */
@@ -415,8 +420,15 @@ export const RunCheckSchema = z.object({
   checkId: z.string().optional(),
   /** The journal action that produced it, kept on this machine to pair it with its screenshot. */
   actionId: z.string().optional(),
-  /** The declared intent this check was taken for, by id: what it proves, named rather than timed. */
+  /**
+   * What this check proves: the agent's `intent` (a sentence, or the id of a declared intent), else a
+   * sentence the engine built from the predicate in the failure voice — see `intentDerived`.
+   */
   intent: z.string().optional(),
+  /** True when `intent` was built from the predicate, not given by the agent. */
+  intentDerived: z.boolean().optional(),
+  /** The index of the `allOf` part that failed, so a title can name the one thing that did not happen. */
+  failedPart: z.number().int().min(0).optional(),
   /** What the page looked like when this check was decided. */
   screenshot: StepScreenshotSchema.optional(),
   /**

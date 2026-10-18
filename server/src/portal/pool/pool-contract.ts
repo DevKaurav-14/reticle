@@ -6,6 +6,9 @@
  * these structurally, which is how the pool stays testable without a real Chromium.
  */
 
+import type { RealInputArgs, RealInputResult } from '@/portal/input/real-input.js';
+import type { LeaseEmulation, LeaseMedia } from './lease-emulation.js';
+
 /** The minimal page surface the pool drives. Real Playwright `Page` satisfies this. */
 export interface PooledPage {
   goto(url: string, opts?: { timeoutMs?: number }): Promise<unknown>;
@@ -31,6 +34,13 @@ export interface PooledPage {
    * reports dispatched/settled while the styles never ran.
    */
   hover?(x: number, y: number): Promise<void>;
+  /**
+   * Press a key with the real keyboard; it goes to whatever holds focus. OPTIONAL, like `hover`: a
+   * page without it keeps the in-page dispatcher, whose synthetic Tab moves no focus.
+   */
+  press?(args: RealInputArgs): Promise<RealInputResult>;
+  /** Set prefers-color-scheme and prefers-reduced-motion. OPTIONAL: without it the media stay. */
+  emulateMedia?(media: LeaseMedia): Promise<void>;
   /** Evaluate a script in the page's current document. OPTIONAL: without it no reader is injected. */
   evaluate?(script: string): Promise<unknown>;
   /** Add an init script to run after document creation but before any page scripts run. */
@@ -132,7 +142,7 @@ export interface PooledContext {
 export interface PooledBrowser {
   isConnected(): boolean;
   /** `ignoreHTTPSErrors` accepts a self-signed or local-CA certificate for this context only. */
-  newContext(opts?: { ignoreHTTPSErrors?: boolean }): Promise<PooledContext>;
+  newContext(opts?: { ignoreHTTPSErrors?: boolean } & LeaseEmulation): Promise<PooledContext>;
   close(): Promise<void>;
   /** Fires when the browser process dies/crashes so the pool can relaunch on the next acquire. */
   onDisconnected(handler: () => void): void;
@@ -147,4 +157,6 @@ export interface ScreenshotOptions {
   jpegQuality?: number;
   /** One image pixel per CSS pixel, so a high-density display does not double a step screenshot. */
   cssScale?: boolean;
+  /** One region of the page, in CSS pixels: what `reticle_screenshot { clip | ref }` asked for. */
+  clip?: { x: number; y: number; width: number; height: number };
 }

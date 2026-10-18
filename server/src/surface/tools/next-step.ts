@@ -49,10 +49,12 @@ export const NextText = {
     if (0 === contenders.length) {
       return `${lead}no folder on this machine declares its project. Run \`reticle init\` in the app's folder.`;
     }
+    // `reticle init` alone keeps the id already on disk, so it cannot separate a copy from its original.
+    const copy = serving ?? 'the copy';
     return (
       `${lead}${String(contenders.length)} folders claim its project id (${contenders.join(', ')}). ` +
-      'Serve the app from the checkout that owns the id, or give this one its own id with ' +
-      "`reticle init` in it — that rewrites its committed .reticle.json, so keep the change on this checkout's branch."
+      'Serve the app from the checkout that owns the id, or give the copy its own id: ' +
+      `\`cd ${copy} && reticle init --new-id\`. That rewrites only the copy's .reticle.json, so keep the change on the copy's branch.`
     );
   },
   REPLAY: (flows: number): string =>

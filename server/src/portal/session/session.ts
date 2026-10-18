@@ -1,9 +1,10 @@
 import type { WebSocket } from 'ws';
+import { noteOwnReload, notePageLoaded } from '@/features/harness/drive-runs.js';
 import { asProjectId, type ChannelId, type ImpactSnapshot, type ProjectId } from '@reticlehq/core';
 import { narrationArgs, type NarrationBy } from './narration-args.js';
 import type { HandshakeFacts } from './facts/handshake-facts.js';
 import { refusedResult } from './page-commands/undeclared-command.js';
-import type { ProductionDrive } from '@/portal/production/production-drive.js';
+import { gated, type ProductionDrive } from '@/portal/production/production-drive.js';
 import { impactSnapshot, recordImpact } from '@/memory/impact/impact-recorder.js';
 import { callingAgent } from '@/hooks/coding-agents.js';
 import { recordNotes } from './human/notes-ledger.js';
@@ -101,8 +102,15 @@ export class Session implements HandshakeFacts {
    * MINTED HERE. This is one of the two places a projectId enters the daemon with its provenance
    * intact: the field is `projectId` on a zod-parsed HELLO, so the page said what it is. Every
    * downstream reader takes the brand from this property rather than re-blessing a string.
+   * Set once more, by `adoptProject`, when a page that said nothing names its project later.
    */
-  readonly projectId: ProjectId | undefined;
+  projectId: ProjectId | undefined;
+  /** Take a later HELLO's project id when the first carried none. A set project is kept. */
+  adoptProject(projectId: string): boolean {
+    if (this.projectId !== undefined) return false;
+    this.projectId = asProjectId(projectId);
+    return true;
+  }
   /**
    * The `.reticle` directory this session's evidence belongs in — impact counters AND capsules.
    * Stamped once, from the project it declared in HELLO, so every counter agrees where it goes.
@@ -355,6 +363,7 @@ export class Session implements HandshakeFacts {
       return;
     }
     if (event.documentId !== undefined) this.#documentId = event.documentId;
+    notePageLoaded(this.id, event, this.#clock());
     if (event.editEpoch !== undefined) this.#editEpoch = event.editEpoch;
     if (event.type === EventType.PAGE_HEALTH) {
       const r = readHealthEvent(event.data);
@@ -657,21 +666,16 @@ export class Session implements HandshakeFacts {
     args: Record<string, unknown> = {},
     timeoutMs: number = DEFAULT_COMMAND_TIMEOUT_MS,
   ): Promise<CommandResult> {
-    // The production policy decides here, where every driven action passes, and never in the page.
-    const drive = this.production;
-    if (drive === undefined) return this.#dispatch(name, args, timeoutMs);
-    return drive.gate(name, args, (n, a) => this.#dispatch(n, a, timeoutMs));
+    return gated(this.production, name, args, (n, a) => this.#dispatch(n, a, timeoutMs));
   }
 
   #dispatch(name: string, args: Args, timeoutMs: number): Promise<CommandResult> {
-    // Recorded HERE rather than at the tool call sites: this is the one place every driven action
-    // passes through, so act_sequence and flow replay count too. Doing it per-tool missed both, and
-    // an under-counted "exercised" reports worse coverage than reality — the safe direction, but
-    // still wrong, and it made the number depend on which tool the agent happened to use.
-    if (name === ReticleCommand.ACT) {
-      const ref = args['ref'];
-      if ('string' === typeof ref) this.recordActedRef(ref);
-    }
+    // Recorded HERE, the one place every driven action passes (act_sequence and flow replay too;
+    // per-tool counting missed both and under-counted "exercised"). A reload sent from here is ours,
+    // so the page coming back is not read as a person reloading mid-drive.
+    const ref = args['ref'];
+    if (name === ReticleCommand.ACT && 'string' === typeof ref) this.recordActedRef(ref);
+    if (name === ReticleCommand.REFRESH) noteOwnReload(this.id, this.#clock());
     // Refused before it is sent, when the page said it does not serve this. The rule, and why
     // an absent declaration is not an empty list, live in `undeclared-command.ts`.
     const refused = refusedResult(name, this.commands, `${COMMAND_ID_PREFIX}refused`);

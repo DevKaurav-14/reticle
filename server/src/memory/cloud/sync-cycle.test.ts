@@ -111,6 +111,7 @@ const cycle = async (
   script: Parameters<typeof server>[0],
   src: SyncSource = source(),
   state: CloudSyncState = {},
+  at: { now?: number; clientVersion?: string } = {},
 ) => {
   const s = server(script);
   const k = sink();
@@ -119,7 +120,8 @@ const cycle = async (
     source: src,
     sink: k.sink,
     state,
-    now: () => NOW,
+    now: () => at.now ?? NOW,
+    ...(at.clientVersion === undefined ? {} : { clientVersion: at.clientVersion }),
     request: s.request,
   });
   return { report, calls: s.calls, written: k.written };
@@ -659,6 +661,58 @@ describe('it sends only the difference', () => {
     expect(upgraded.calls.some((c) => 'POST' === c.method)).toBe(true);
     expect(upgraded.report.flowsSent).toBe(1);
     expect(upgraded.report.ok).toBe(true);
+  });
+
+  /*
+   * A refusal was kept forever: after the platform relaxed its rule, a refused flow set stayed
+   * refused until somebody deleted the entry from cloud-state.json by hand. The platform sends no
+   * version of its own, so the refusal records the CLI's, and a new one is a reason to ask again.
+   */
+  describe('a refusal does not last forever', () => {
+    const src = source({ flows: () => [{ name: 'sign-in' }] });
+    const refusing = {
+      status: { knownRunIds: [] },
+      sync: { flows: { accepted: 0, rejected: [{ index: 0, reason: 'too strict' }] } },
+    };
+    const posted = (c: { calls: Array<{ method: string }> }): boolean =>
+      c.calls.some((call) => 'POST' === call.method);
+
+    it('offers a refused set once more when the version changes, then holds again', async () => {
+      const first = await cycle(refusing, src, {}, { clientVersion: '3.8.0' });
+      const same = await cycle(refusing, src, first.written.state, { clientVersion: '3.8.0' });
+      expect(posted(same)).toBe(false);
+      const upgraded = await cycle(refusing, src, first.written.state, { clientVersion: '3.9.0' });
+      expect(posted(upgraded)).toBe(true);
+      const after = await cycle(refusing, src, upgraded.written.state, { clientVersion: '3.9.0' });
+      expect(posted(after)).toBe(false);
+    });
+
+    it('offers a refused set again after seven days', async () => {
+      const first = await cycle(refusing, src);
+      const sixDays = await cycle(refusing, src, first.written.state, {
+        now: NOW + 6 * 24 * 60 * 60 * 1000,
+      });
+      expect(posted(sixDays)).toBe(false);
+      const sevenDays = await cycle(refusing, src, first.written.state, {
+        now: NOW + 7 * 24 * 60 * 60 * 1000,
+      });
+      expect(posted(sevenDays)).toBe(true);
+    });
+
+    it('offers a refused run again when the version changes', async () => {
+      const runs = source({ runs: () => [{ runId: 'r1', payload: { runId: 'r1' } }] });
+      const refusingRun = {
+        status: { knownRunIds: [] },
+        sync: { runs: { accepted: 0, rejected: [{ index: 0, reason: 'too strict' }] } },
+      };
+      const first = await cycle(refusingRun, runs, {}, { clientVersion: '3.8.0' });
+      const same = await cycle(refusingRun, runs, first.written.state, { clientVersion: '3.8.0' });
+      expect(posted(same)).toBe(false);
+      const upgraded = await cycle(refusingRun, runs, first.written.state, {
+        clientVersion: '3.9.0',
+      });
+      expect(posted(upgraded)).toBe(true);
+    });
   });
 
   it('sends the flow set again once a flow in it changes', async () => {

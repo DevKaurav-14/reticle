@@ -26,6 +26,7 @@ export * from './artifacts/flow-select.js'; // selectFlows — which flows a run
 export * from './artifacts/flow-unreached.js'; // unreachedRoutes — known routes this run never visited
 export * from './artifacts/flow-mutation-target.js'; // what a flow says it depends on: mutationTargetsFor + perturbationFor
 export * from './wire/constants/constants.js'; // EventType, ActionType, wire constants, TRANSPORT_LIMITS, …
+export * from './wire/constants/response-body-reason.js'; // why a NET_REQUEST carries no response body (#1520)
 export * from './identity/source-constants.js'; // DATA_RETICLE_SOURCE_ATTR, RETICLE_ROOT_GLOBAL
 export * from './identity/testid-attribute.js'; // DEFAULT_TESTID_ATTR, ALTERNATIVE_TESTID_ATTRS
 export * from './wire/event-classification.js'; // CHURN_TYPES — shared eviction priority for buffer/queue
@@ -94,6 +95,7 @@ export * from './verdict/intent.js'; // what a change was supposed to make true,
 export * from './verdict/run-context.js'; // what a run established, folded and capped, for the agent to pull back
 export * from './verdict/instrumentation-gap.js'; // what Reticle could not see, and the change that would let it
 export * from './verdict/instrumentation-coverage.js'; // how much of an app Reticle sees, and the prompt that closes the rest
+export * from './verdict/check-sentence.js'; // a recorded check as a person's sentence, and the part that failed
 export * from './verdict/security.js'; // sanitize/serialize helpers shared by browser + server
 export * from './wire/redaction.js'; // isSensitiveKey / scrubKnownSecrets — the shared redaction rules
 export * from './wire/state-select.js'; // selectPath / capDepth — shared by browser SDK + server fallback
@@ -104,6 +106,7 @@ export * from './words/no-session-reason.js';
 export * from './telemetry-refusal.js';
 export * from './wire/narrow.js';
 export * from './wire/tool-names.js';
+export * from './wire/next-step.js'; // who does what next after a refusal, and the connect command
 export * from './wire/snapshot-tree.js'; // parseInteractive — the browser writes this format, Node reads it
 export * from './wire/platform.js';
 export * from './wire/channel.js';

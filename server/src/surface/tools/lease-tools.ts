@@ -36,7 +36,6 @@ import { reticleStateHome } from '@/command/daemon/daemon.js';
 import { claimArtifactRoot, dropArtifactRootClaim } from '@/memory/project/root-claims.js';
 import {
   LeaseNotReadyReason,
-  RETICLE_URL_PARAM,
   RETICLE_DEFAULT_PORT,
   SeedStorageSchema,
   originOf,
@@ -55,6 +54,7 @@ import {
   permissionRefusal,
   refuseRegrant,
 } from './lease-permissions.js';
+import { LEASE_EMULATE_ARG, leaseEmulationOf } from '@/portal/input/viewport-tools.js';
 
 /**
  * Everything the daemon already knows about why a leased tab might not have dialled in.
@@ -128,33 +128,8 @@ function alreadyHeldHint(sessionId: string, origin: string): string {
   );
 }
 
-/**
- * Append Reticle identity params (__reticle_session, optional __reticle_project) to a URL so the app's own SDK
- * adopts them on connect. Pure; falls back to plain concatenation if the URL can't be parsed.
- */
-export function appendReticleParams(
-  url: string,
-  session: string,
-  projectId?: string,
-  hud?: HudVisibility,
-): string {
-  try {
-    const u = new URL(url);
-    u.searchParams.set(RETICLE_URL_PARAM.SESSION, session);
-    if (projectId !== undefined && projectId.length > 0) {
-      u.searchParams.set(RETICLE_URL_PARAM.PROJECT, projectId);
-    }
-    if (hud !== undefined) u.searchParams.set(RETICLE_URL_PARAM.HUD, hud);
-    return u.toString();
-  } catch {
-    const sep = url.includes('?') ? '&' : '?';
-    const proj =
-      projectId !== undefined && projectId.length > 0
-        ? `&${RETICLE_URL_PARAM.PROJECT}=${encodeURIComponent(projectId)}`
-        : '';
-    return `${url}${sep}${RETICLE_URL_PARAM.SESSION}=${encodeURIComponent(session)}${proj}`;
-  }
-}
+export { appendReticleParams, carryReticleIdentity, resolveLeasedSessionId } from './lease-url.js';
+import { appendReticleParams, resolveLeasedSessionId } from './lease-url.js';
 
 export { cleanNavError, evaluateSeedPrecondition, scrubSeedFromError } from './lease-seed.js';
 import {
@@ -171,67 +146,6 @@ function newLeaseId(): string {
       ? globalThis.crypto.randomUUID()
       : `${String(Date.now())}-${String(performance.now())}`;
   return `lease-${uuid}`;
-}
-
-/**
- * The session a lease's tab actually registered as, or undefined while nothing has.
- *
- * Normally that is the lease id: `appendReticleParams` stamps `__reticle_session` on the URL and the
- * SDK adopts it. An app that passes an explicit `session` to `connect()` keeps its own name instead,
- * which is legitimate — a single-app fixture does it deliberately so a battery can address it by a
- * known id. Matching on the lease id alone could never see those tabs, so the lease reported
- * `ready: false` and a hint blaming a port mismatch while the session was connected and driveable.
- *
- * The URL marker is the evidence, and it is what makes this safe: two concurrent leases on one origin
- * carry different markers, so neither can adopt the other's tab. Parsed rather than substring-matched,
- * so `lease-abc` cannot claim `lease-abcdef`.
- */
-export function resolveLeasedSessionId(
-  sessions: { get: (id: string) => unknown; all: () => { id: string; url?: string }[] },
-  leaseId: string,
-): string | undefined {
-  if (sessions.get(leaseId) !== undefined) return leaseId;
-  return sessions.all().find((s) => sessionParamOf(s.url) === leaseId)?.id;
-}
-
-/**
- * Carry a claimed identity across a navigation.
- *
- * A LEASED tab is addressed by `__reticle_session` in its URL: that param is how the pool finds the
- * context it opened, and — since succession was tightened — it is also the ONLY thing that lets the
- * reconnecting document inherit the lease. `reticle_navigate` sent the caller's raw URL, so the very
- * first navigation stripped the marker, the tab re-announced as an ordinary anonymous session, and
- * the lease was orphaned: "no sessions are connected at all", with a browser window still open on
- * screen. A leased browser that cannot survive being navigated is not a usable one.
- *
- * A tab that claims nothing is left exactly as it was — this must never bolt Reticle's params onto
- * a human's own URL.
- */
-export function carryReticleIdentity(fromUrl: string | undefined, toUrl: string): string {
-  const session = sessionParamOf(fromUrl);
-  if (session === undefined) return toUrl;
-  // Already addressed (a caller passing the stamped URL back) — appending would be a no-op at best.
-  if (sessionParamOf(toUrl) !== undefined) return toUrl;
-  const projectId = projectParamOf(fromUrl);
-  return appendReticleParams(toUrl, session, projectId);
-}
-
-function projectParamOf(url: string | undefined): string | undefined {
-  if (url === undefined) return undefined;
-  try {
-    return new URL(url).searchParams.get(RETICLE_URL_PARAM.PROJECT) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sessionParamOf(url: string | undefined): string | undefined {
-  if (url === undefined) return undefined;
-  try {
-    return new URL(url).searchParams.get(RETICLE_URL_PARAM.SESSION) ?? undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const LEASE_READY_ATTEMPTS = 100;
@@ -429,6 +343,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       .describe('How the HUD starts on the page: shown (default), hidden, or removed.'),
     permissions: LEASE_PERMISSIONS_ARG,
     production: production.PRODUCTION_LEASE_ARG,
+    emulate: LEASE_EMULATE_ARG,
     root: z
       .string()
       .optional()
@@ -519,6 +434,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
       parseLeasePermissions(args['permissions']),
       args['production'],
     );
+    const emulate = leaseEmulationOf(args['emulate']);
     // The stub of the shell bindings, when the caller supplied one. Installed by the pool before
     // the first navigation, so it is already defined when the app's first module runs.
     const initScript = asString(args['initScript']);
@@ -591,8 +507,12 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
         existing !== undefined &&
         'boolean' === typeof certAsked &&
         pool.ignoresHTTPSErrors(existing) !== certAsked;
+      // Emulation is set before the first paint, so a held lease is replaced like a seeded one.
       if (
-        (validatedSeed !== undefined || certMismatch || activated !== undefined) &&
+        (validatedSeed !== undefined ||
+          certMismatch ||
+          activated !== undefined ||
+          emulate !== undefined) &&
         existing !== undefined
       ) {
         // Seeding or a different certificate setting asked for: release its own context so the new
@@ -666,6 +586,7 @@ export const LEASE_ACQUIRE_TOOL: ToolDef = {
           ...(initScript !== undefined ? { initScript } : {}),
           ...(permissions !== undefined ? { permissions } : {}),
           ...(true === args['ignoreHTTPSErrors'] ? { ignoreHTTPSErrors: true } : {}),
+          ...(emulate === undefined ? {} : { emulate }),
         });
       } catch (err) {
         if (err instanceof PoolAtCapacityError) throw err;
@@ -792,6 +713,14 @@ const LEASE_RELEASE_TOOL: ToolDef = {
     const sessionId = asString(args['sessionId']);
     if (sessionId === undefined || 0 === sessionId.length) {
       throw new Error('reticle_lease{action:"release"} requires a sessionId');
+    }
+    // An id that holds no lease (a typo, or one that expired) answered `released: true`.
+    if (pool.leaseUrl(sessionId) === undefined) {
+      const held = pool.leasedSessionIds();
+      throw new Error(
+        `reticle_lease{action:"release"}: no lease '${sessionId}' is held, so nothing was released. ` +
+          (0 === held.length ? 'No lease is held now.' : `Leases held now: ${held.join(', ')}.`),
+      );
     }
     return { released: true, leased: await releaseLease(deps, pool, sessionId) };
   },

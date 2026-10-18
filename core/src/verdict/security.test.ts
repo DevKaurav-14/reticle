@@ -3,6 +3,8 @@ import {
   OutwardAction,
   isDangerousActionText,
   isLoopbackHostname,
+  isPaymentField,
+  isPaymentProviderUrl,
   outwardActionOf,
   outwardActionsAsked,
 } from './security.js';
@@ -156,7 +158,6 @@ describe('what the Harness may press', () => {
     expect(outwardActionOf('Send invitation')).toBe(OutwardAction.INVITE);
     expect(outwardActionOf('Send message')).toBe(OutwardAction.SEND);
     expect(outwardActionOf('Remove member')).toBe(OutwardAction.DELETE);
-    expect(outwardActionOf('Add a card and start the 14-day trial')).toBe(OutwardAction.PAY);
     expect(outwardActionOf('Create API key')).toBe(OutwardAction.CREATE_KEY);
     expect(outwardActionOf('Sign out')).toBe(OutwardAction.SIGN_OUT);
     expect(outwardActionOf('Open Runs')).toBeUndefined();
@@ -173,6 +174,52 @@ describe('what the Harness may press', () => {
     expect(outwardActionsAsked('Reopen the issue and check it is open again')).toEqual([
       OutwardAction.CHANGE_STATE,
     ]);
+  });
+
+  /*
+   * Three of four explores failed because the Harness refused "Start free trial" as "would need to
+   * pay". The payment boundary is entering card details or leaving for a payment provider, never the
+   * words on a button.
+   */
+  it('presses a button whose label mentions a trial, an upgrade or a payment', () => {
+    for (const label of ['Start free trial', 'Upgrade', 'Subscribe', 'Checkout', 'Place order'])
+      expect(outwardActionOf(label)).toBeUndefined();
+  });
+
+  it('names a link or form that leaves for a payment provider as paying', () => {
+    expect(outwardActionOf('Pay now https://checkout.stripe.com/c/pay/cs_1')).toBe(
+      OutwardAction.PAY,
+    );
+    expect(outwardActionOf('https://test.checkout.dodopayments.com/buy/p_1')).toBe(
+      OutwardAction.PAY,
+    );
+    expect(outwardActionOf('https://www.paypal.com/checkoutnow')).toBe(OutwardAction.PAY);
+    expect(outwardActionOf('Docs https://notstripe.com/pricing')).toBeUndefined();
+    expect(outwardActionOf('/billing/checkout')).toBeUndefined();
+  });
+
+  it('knows a payment provider by its origin', () => {
+    expect(isPaymentProviderUrl('https://buy.stripe.com/x')).toBe(true);
+    expect(isPaymentProviderUrl('https://sandbox-checkout.paddle.com/x')).toBe(true);
+    expect(isPaymentProviderUrl('https://app.lemonsqueezy.com/x')).toBe(true);
+    expect(isPaymentProviderUrl('https://api.razorpay.com/x')).toBe(true);
+    expect(isPaymentProviderUrl('https://payments.braintreegateway.com/x')).toBe(true);
+    expect(isPaymentProviderUrl('https://stripe.com.example.net/x')).toBe(false);
+    expect(isPaymentProviderUrl('/checkout')).toBe(false);
+  });
+
+  it('knows a card or bank field by its autocomplete, name or label', () => {
+    expect(isPaymentField({ autocomplete: 'cc-number' })).toBe(true);
+    expect(isPaymentField({ autocomplete: 'cc-csc' })).toBe(true);
+    expect(isPaymentField({ autocomplete: 'cc-exp-month' })).toBe(true);
+    expect(isPaymentField({ name: 'cardNumber' })).toBe(true);
+    expect(isPaymentField({ id: 'card-cvc' })).toBe(true);
+    expect(isPaymentField({ label: 'Expiry date' })).toBe(true);
+    expect(isPaymentField({ name: 'iban' })).toBe(true);
+    expect(isPaymentField({ inputMode: 'numeric', name: 'cvv' })).toBe(true);
+    expect(isPaymentField({ autocomplete: 'email', name: 'email', label: 'Email' })).toBe(false);
+    expect(isPaymentField({ inputMode: 'numeric', name: 'quantity' })).toBe(false);
+    expect(isPaymentField({ name: 'promo', label: 'Promo code' })).toBe(false);
   });
 
   it('reads what a journey asks for, and what it forbids', () => {

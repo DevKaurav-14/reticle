@@ -67,9 +67,12 @@ function input(partial: Partial<PlanInput>): PlanInput {
       ? {}
       : { reticleConfigExists: partial.reticleConfigExists }),
     reticleConfigSource: partial.reticleConfigSource,
+    copiedIdSources: partial.copiedIdSources,
     ...(partial.craEntry === undefined ? {} : { craEntry: partial.craEntry }),
     ...(partial.craEnv === undefined ? {} : { craEnv: partial.craEnv }),
     ...(partial.pairingToken === undefined ? {} : { pairingToken: partial.pairingToken }),
+    ...(partial.agentFileRoot === undefined ? {} : { agentFileRoot: partial.agentFileRoot }),
+    agentRootConfigSource: partial.agentRootConfigSource,
     options: partial.options ?? { port: undefined, mcp: true, install: false },
   };
 }
@@ -120,6 +123,45 @@ describe('buildPlan — agent verification rule (makes the agent USE Reticle)', 
       AGENT_RULE_STEP,
     );
     expect(s.status).toBe(StepStatus.ALREADY);
+  });
+
+  /**
+   * A CLAUDE.md that imports AGENTS.md (#1680). Claude Code reads AGENTS.md through the import, so
+   * the copy init writes there already reaches it; a second copy in CLAUDE.md loaded the rule twice.
+   */
+  describe('a CLAUDE.md that imports AGENTS.md', () => {
+    const fileStep = (plan: ReturnType<typeof buildPlan>, target: string) =>
+      plan.steps.find((s) => s.title === AGENT_RULE_STEP && s.target === target);
+
+    it.each([
+      ['only the import', '@AGENTS.md\n'],
+      ['the ./ form', '@./AGENTS.md\n'],
+      ['the import beside other content', '# House rules\n\n@AGENTS.md\n\nBe terse.\n'],
+      ['CRLF line endings and spaces', '# House rules\r\n  @AGENTS.md  \r\n'],
+    ])('with %s, CLAUDE.md is left alone and AGENTS.md still gets the rule', (_label, claudeMd) => {
+      const plan = buildPlan(
+        input({ claudeCli: true, claudeMdContent: claudeMd, agentsMdContent: null }),
+      );
+      const claude = fileStep(plan, 'CLAUDE.md');
+      expect(claude?.status).toBe(StepStatus.ALREADY);
+      expect(claude?.write).toBeUndefined();
+      expect(claude?.detail).toContain('imports AGENTS.md');
+      const agents = fileStep(plan, 'AGENTS.md');
+      expect(agents?.status).toBe(StepStatus.APPLY);
+      expect(agents?.write?.content).toContain('Verifying with Reticle');
+    });
+
+    it.each([
+      ['an import of another file', '@docs/AGENTS.md\n'],
+      ['AGENTS.md named inside a sentence', 'Read @AGENTS.md before you start.\n'],
+    ])('with %s, CLAUDE.md still gets the rule', (_label, claudeMd) => {
+      const claude = fileStep(
+        buildPlan(input({ claudeCli: true, claudeMdContent: claudeMd })),
+        'CLAUDE.md',
+      );
+      expect(claude?.status).toBe(StepStatus.APPLY);
+      expect(claude?.write?.content).toContain('Verifying with Reticle');
+    });
   });
 
   it('writes a Cursor .mdc rule when Cursor is present', () => {
@@ -350,6 +392,90 @@ describe('an existing config is read, not assumed correct', () => {
     expect(step(plan, CONFIG_STEP).status).toBe(StepStatus.APPLY);
   });
 });
+
+/*
+ * A copied repository keeps the original's `.reticle.json`, and with it the original's project id.
+ * Re-running init kept the id on disk, so nothing gave the copy an id of its own and every session it
+ * served was refused as ambiguous. `--new-id` rewrites the id, and only the id, in this checkout.
+ */
+describe('init --new-id gives this checkout its own project id', () => {
+  const COPIED = '{\n  "framework": "vite",\n  "projectId": "shop-aaaaaaaa",\n  "port": 4401\n}\n';
+  const NEW_ID = 'shop-bbbbbbbb';
+
+  it('rewrites the project id and keeps every other field', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID, newId: true },
+      }),
+    );
+    const config = step(plan, CONFIG_STEP);
+    expect(config.status).toBe(StepStatus.APPLY);
+    expect(config.detail).toContain('shop-aaaaaaaa');
+    expect(config.detail).toContain(NEW_ID);
+    expect(JSON.parse(config.write?.content ?? '{}')).toEqual({
+      framework: 'vite',
+      projectId: NEW_ID,
+      port: 4401,
+    });
+  });
+
+  it('rewrites the copy at the agent root that names the old id', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        agentFileRoot: '/code/shop-copy',
+        agentRootConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID, newId: true },
+      }),
+    );
+    const root = step(plan, 'Reticle config (agent root)');
+    expect(root.status).toBe(StepStatus.APPLY);
+    expect(projectIdIn(root.write?.content)).toBe(NEW_ID);
+  });
+
+  it('keeps the id on disk without the flag', () => {
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID },
+      }),
+    );
+    expect(step(plan, CONFIG_STEP).status).toBe(StepStatus.ALREADY);
+  });
+
+  /*
+   * A copy whose app named its id by hand in `connect({ projectId })` kept sending its evidence to
+   * the ORIGINAL checkout after `--new-id`: the config moved, the literal did not.
+   */
+  it('rewrites the old id where the app names it by hand, and only the id', () => {
+    const MAIN =
+      "import { connect } from '@reticlehq/browser';\nconnect({ projectId: 'shop-aaaaaaaa' });\n" +
+      "const label = 'shop-aaaaaaaa-old';\n";
+    const plan = buildPlan(
+      input({
+        reticleConfigExists: true,
+        reticleConfigSource: COPIED,
+        copiedIdSources: [{ path: 'src/main.tsx', source: MAIN }],
+        options: { port: undefined, mcp: true, install: false, projectId: NEW_ID, newId: true },
+      }),
+    );
+    const site = plan.steps.find((s) => 'src/main.tsx' === s.target);
+    expect(site?.status).toBe(StepStatus.APPLY);
+    expect(site?.detail).toContain('shop-aaaaaaaa');
+    expect(site?.write?.content).toBe(
+      "import { connect } from '@reticlehq/browser';\nconnect({ projectId: 'shop-bbbbbbbb' });\n" +
+        "const label = 'shop-aaaaaaaa-old';\n",
+    );
+  });
+});
+
+function projectIdIn(content: string | undefined): unknown {
+  return (JSON.parse(content ?? '{}') as Record<string, unknown>)['projectId'];
+}
 
 describe('buildPlan — Vite', () => {
   it('patches the vite config; no separate entry-file step (plugin injects connect)', () => {

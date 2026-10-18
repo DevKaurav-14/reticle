@@ -27,6 +27,8 @@ import type {
   PooledPage,
   ScreenshotOptions,
 } from './pool-contract.js';
+import type { RealInputArgs, RealInputResult } from '@/portal/input/real-input.js';
+import type { LeaseEmulation, LeaseMedia } from './lease-emulation.js';
 export type {
   InitScriptHandle,
   Launcher,
@@ -417,6 +419,36 @@ export class BrowserPool {
     }
   }
 
+  /** Set a live lease's media features, or false when this is not a lease or its page cannot. */
+  async emulateLease(sessionId: string, media: LeaseMedia): Promise<boolean> {
+    const lease = this.#active.get(this.#leaseIdOf(sessionId));
+    if (lease?.page.emulateMedia === undefined) return false;
+    this.touch(sessionId);
+    try {
+      await lease.page.emulateMedia(media);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Whether this session is a lease whose page has a real keyboard. */
+  hasKeyboard(sessionId: string): boolean {
+    return this.#active.get(this.#leaseIdOf(sessionId))?.page.press !== undefined;
+  }
+
+  /**
+   * Press a key with the leased page's real keyboard, or undefined when this session is not a lease
+   * or its page has no keyboard. A throw is the caller's to read: a key that went down and did not
+   * come up must not be answered with a second, synthetic press.
+   */
+  async pressLease(sessionId: string, args: RealInputArgs): Promise<RealInputResult | undefined> {
+    const lease = this.#active.get(this.#leaseIdOf(sessionId));
+    if (lease?.page.press === undefined) return undefined;
+    this.touch(sessionId);
+    return lease.page.press(args);
+  }
+
   /**
    * Install network mocks on a leased page, or false when this session is not a lease or cannot
    * intercept. Same optional-capability contract as screenshotLease: absence must read as "could not
@@ -591,6 +623,8 @@ export class BrowserPool {
       permissions?: readonly string[];
       /** Accept a self-signed or local-CA dev certificate for this lease's context only (#1255). */
       ignoreHTTPSErrors?: boolean;
+      /** Media and viewport set on the context, so the first paint already has them. */
+      emulate?: LeaseEmulation;
     } = {},
   ): Promise<Lease> {
     if (this.#closed) throw new Error('browser pool is shut down');
@@ -611,8 +645,12 @@ export class BrowserPool {
     let pendingDialogMessage: string | undefined;
     try {
       const browser = await this.#ensureBrowser(slot);
+      const contextOpts = {
+        ...(true === opts.ignoreHTTPSErrors ? { ignoreHTTPSErrors: true } : {}),
+        ...opts.emulate,
+      };
       context = await browser.newContext(
-        true === opts.ignoreHTTPSErrors ? { ignoreHTTPSErrors: true } : undefined,
+        0 < Object.keys(contextOpts).length ? contextOpts : undefined,
       );
       if (opts.permissions !== undefined)
         await grantLeasePermissions(context, opts.permissions, url);

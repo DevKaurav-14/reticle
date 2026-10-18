@@ -84,6 +84,7 @@ const INIT_DEFAULTS = {
   url: undefined,
   timeoutSeconds: undefined,
   licenseKey: undefined,
+  newId: false,
 };
 
 describe('parseCliArgs', () => {

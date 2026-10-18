@@ -56,6 +56,12 @@ export interface ActionEffect {
   occludedBy: string | null;
   /** Click-like only: the target was off-viewport, so it was scrolled into view before dispatch. */
   scrolledIntoView: boolean;
+  /** When `occluded`: what covers the target, in words (test id, else role and name, else tag). */
+  occluderName?: string;
+  /** Click-like only: the target is laid out with no size, so a person has nothing to click. */
+  noSize?: true;
+  /** Click-like only: still outside the viewport after it was scrolled into view. */
+  offViewport?: true;
   /**
    * How long the pointer was ACTUALLY held down, for a click with `args.holdMs`. Absent otherwise.
    *
@@ -95,6 +101,8 @@ export interface ActionResult {
   effect: ActionEffect;
   /** data-testid of the resolved element, when present — lets the server compile a ref-stable replay step. */
   testid?: string;
+  /** How many elements carry that test id, when more than one does: then it is no anchor. */
+  testidOf?: number;
   /**
    * Auto-anchor fallback (attached ONLY when there is no testid): the element's nearest component
    * name + source location, so the server can compile a stable `component` anchor instead of a
@@ -115,11 +123,14 @@ export interface ActionResult {
   secret?: true;
   /** Best-effort caveat the agent should heed (e.g. synthetic hover may not fire enter/leave). */
   warning?: string;
+  /** The target is Reticle's own UI (reachable only with the HUD exposed): never an app step. */
+  reticleUi?: true;
 }
 
 /** The element's stable anchor: testid (gold), else component/source (auto-anchor). */
 export interface CapturedAnchor {
   testid?: string;
+  testidOf?: number;
   component?: string;
   source?: { file: string; line: number; column?: number };
   /**
@@ -154,7 +165,12 @@ export function anchorOf(el: Element): CapturedAnchor {
   const testid = readTestId(el) ?? undefined;
   const info = identifyComponent(el);
   const out: CapturedAnchor = {};
-  if (testid !== undefined) out.testid = testid;
+  if (testid !== undefined) {
+    out.testid = testid;
+    // A replay takes the first match, so a shared test id would land on another element.
+    const shared = elementsMatching({ by: QueryBy.TESTID, value: testid }).length;
+    if (1 < shared) out.testidOf = shared;
+  }
   const component = info?.componentStack[0];
   if (component !== undefined) out.component = component;
   if (info?.source !== undefined) out.source = info.source;
@@ -207,6 +223,7 @@ export const result = (
   // by the testid when it has one (see the flow compiler) and that is unchanged — what changed is
   // that having a testid no longer erases the answer to "which file do I open?".
   if (anchor.testid !== undefined) base.testid = anchor.testid;
+  if (anchor.testidOf !== undefined) base.testidOf = anchor.testidOf;
   if (anchor.component !== undefined) base.component = anchor.component;
   if (anchor.source !== undefined) base.source = anchor.source;
   if (anchor.role !== undefined) base.role = anchor.role;

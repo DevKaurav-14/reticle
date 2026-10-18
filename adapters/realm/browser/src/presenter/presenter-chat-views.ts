@@ -4,6 +4,7 @@ import {
   type HarnessConfig,
   type AgentLink,
   type HarnessDrive,
+  type LastDrive,
 } from '@reticlehq/core';
 import { PLAN_HTML } from './presenter-plan.js';
 import type { AnnotationItem } from '@/review/annotator.js';
@@ -68,10 +69,20 @@ const HARNESS_STARTING_MS = 20_000;
  * signed in to, else the hosted service. A self-hosted or local platform was sent to the hosted one.
  */
 export function platformBase(config: HarnessConfig | undefined, account: AccountState): string {
-  const base = [config?.platformUrl, account.host].find(
+  // The console's origin first, from the plan page it named: the API's origin 404s for a page.
+  const base = [consoleOrigin(config?.planUrl), config?.platformUrl, account.host].find(
     (url): url is string => url !== undefined && isSafeDashboardUrl(url),
   );
   return esc((base ?? DEFAULT_PLATFORM_URL).replace(/\/+$/, ''));
+}
+
+function consoleOrigin(planUrl: string | undefined): string | undefined {
+  if (planUrl === undefined || !isSafeDashboardUrl(planUrl)) return undefined;
+  try {
+    return new URL(planUrl).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 interface HistoricalAnnotation extends AnnotationItem {
@@ -326,13 +337,23 @@ export class ChatViews {
   #customPersona = '';
   #harnessHtml = '';
   #harnessPageHtml = '';
-  /** Link pressed and not answered yet: the page says Linking… until the daemon's push says linked. */
+  /**
+   * Link pressed and not answered yet: the page says Linking… until the daemon's push says linked.
+   * A link that never lands (the tab names no project, the platform refused) gives the button back
+   * after HARNESS_STARTING_MS; it stayed disabled until a reload.
+   */
   #linking = false;
+  #linkTimer: ReturnType<typeof setTimeout> | undefined;
   #agent = new AgentLinkView();
   /** The persona this panel started the running drive as, so its row can say so. */
   #startedAs: string | undefined;
+  /** How the last drive on this tab ended, or why none started, from the daemon. */
+  #last: LastDrive | undefined;
   /** Run pressed, no drive reported yet. Cleared by the drive arriving, or by the timer. */
   #starting: ReturnType<typeof setTimeout> | undefined;
+  /** The daemon's last word as Run was pressed: a newer one is the answer to that press. */
+  #lastSeq: number | undefined;
+  #pressedAfter: number | undefined;
 
   constructor(onImpact: () => void, onOpenChat: (view: ChatView) => void, drive?: HudDriveHost) {
     this.#onImpact = onImpact;
@@ -385,6 +406,12 @@ export class ChatViews {
       if (null !== linkButton) {
         if (linkButton.disabled) return;
         this.#linking = true;
+        if (this.#linkTimer !== undefined) clearTimeout(this.#linkTimer);
+        this.#linkTimer = setTimeout(() => {
+          this.#linkTimer = undefined;
+          this.#linking = false;
+          this.#paintHarness();
+        }, HARNESS_STARTING_MS);
         this.#drive?.link();
         this.#paintHarness();
         return;
@@ -393,6 +420,7 @@ export class ChatViews {
       if (null !== run) {
         if (run.disabled) return;
         this.#startedAs = this.#personaPick;
+        this.#pressedAfter = this.#lastSeq;
         this.#markStarting(true);
         this.#drive?.run(personaText(this.#personaPick, this.#customPersona));
         return;
@@ -577,12 +605,27 @@ export class ChatViews {
     this.#paintHarness();
   }
   /** The drive running in this tab's project, from the daemon's snapshot: Stop while one runs. */
-  paintDrive(drive: HarnessDrive | undefined): void {
+  paintDrive(drive: HarnessDrive | undefined, last?: LastDrive): void {
     this.#driving = drive;
+    // Only a safe http(s) link is offered; the sentence is escaped where it is drawn.
+    const runUrl =
+      last?.runUrl !== undefined && isSafeDashboardUrl(last.runUrl) ? esc(last.runUrl) : undefined;
+    this.#last =
+      last === undefined
+        ? undefined
+        : {
+            ...(runUrl === undefined ? {} : { runUrl }),
+            ...(last.said === undefined ? {} : { said: last.said }),
+          };
     // The drive has landed: Starting… becomes Stop. No drive while still starting is the push that
     // raced the daemon registering it, and must not offer Run again for a beat.
-    if (drive !== undefined) this.#markStarting(false);
-    else if (this.#starting === undefined) this.#startedAs = undefined;
+    this.#lastSeq = last?.seq;
+    // A new word with no drive is the answer to the press (refused, the cloud unreachable): said
+    // now, not after the Starting… fallback ran out.
+    const answered =
+      last?.seq !== undefined && last.seq !== this.#pressedAfter && this.#starting !== undefined;
+    if (drive !== undefined || answered) this.#markStarting(false);
+    if (drive === undefined && this.#starting === undefined) this.#startedAs = undefined;
     this.#paintHarness();
   }
 
@@ -599,7 +642,11 @@ export class ChatViews {
   }
   paintHarness(config: HarnessConfig | undefined, gate?: HarnessGateView): void {
     // A config now means the project is linked: the link the person pressed has landed.
-    if (config !== undefined) this.#linking = false;
+    if (config !== undefined) {
+      this.#linking = false;
+      if (this.#linkTimer !== undefined) clearTimeout(this.#linkTimer);
+      this.#linkTimer = undefined;
+    }
     this.#harness = config;
     this.#gate = gate;
     this.#paintHarness();
@@ -662,9 +709,13 @@ export class ChatViews {
       pick: this.#personaPick,
       startedAs: this.#startedAs,
       setupUrl: `${base}${HARNESS_SETUP_PATH}${project}${HARNESS_SETUP_HASH}`,
-      planUrl: `${base}${HARNESS_PLAN_PATH}`,
+      planUrl:
+        config?.planUrl !== undefined && isSafeDashboardUrl(config.planUrl)
+          ? esc(config.planUrl)
+          : `${base}${HARNESS_PLAN_PATH}`,
       linking: this.#linking,
       starting: this.#starting !== undefined && this.#driving === undefined,
+      ...(this.#last === undefined ? {} : { last: this.#last }),
     };
     // Unchanged markup is not redrawn, so a repaint mid-typing never drops focus or the cursor; changed
     // markup is morphed, so a control that only changed its words stays the same element.

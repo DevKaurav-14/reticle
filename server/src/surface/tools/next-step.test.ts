@@ -139,6 +139,20 @@ describe('what the agent is told to do next', () => {
     expect(said).toContain('.reticle.json');
   });
 
+  /*
+   * A copied repository keeps the original's project id. The refusal advised `reticle init`, which
+   * keeps the id already on disk, so following it changed nothing.
+   */
+  it('names both folders and the one command that gives the copy its own id', () => {
+    const said = NextText.UNMATCHED(
+      '/home/me/.reticle/unmatched/web-1',
+      ['/code/mono', '/code/clone'],
+      '/code/clone',
+    );
+    expect(said).toContain('/code/mono');
+    expect(said).toContain('cd /code/clone && reticle init --new-id');
+  });
+
   it('on a linked project with nothing wrong, says the run syncs on its own', () => {
     const r = root({ 'cloud.json': { projectId: 'p' }, 'request.json': { at: NOW } });
     expect(verdict(r)).toBe(NextText.FINISH_LINKED);

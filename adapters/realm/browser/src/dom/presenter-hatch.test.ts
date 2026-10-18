@@ -19,6 +19,8 @@ import {
   setPresenterVisible,
 } from './dom-ignore.js';
 import { getCapabilities } from '@/registry/capabilities.js';
+import { Presenter } from '@/presenter/presenter.js';
+import { matchQuery } from './query.js';
 
 const el = (html: string): Element => {
   const host = document.createElement('div');
@@ -122,5 +124,49 @@ describe("the HUD's narration is never a match source", () => {
           el('<i></i>'),
       ),
     ).toBe(false);
+  });
+
+  /*
+   * The act strip's line ("Finding \"NEVER-SHOWN\"") was still a match source: with the HUD shown, a
+   * visible-text `until` on words the app never rendered came back verified "yes".
+   */
+  it('ignores the act strip line the HUD writes for each call, while its buttons are seen', () => {
+    document.body.replaceChildren();
+    new Presenter().mount();
+    setPresenterVisible(true);
+    const line = document.querySelector('.reticle-act');
+    const strip = document.querySelector('.reticle-act-strip');
+    expect(line).not.toBeNull();
+    expect(isIgnored(line ?? el('<i></i>'))).toBe(true);
+    const button = strip?.querySelector('button');
+    expect(button).not.toBeNull();
+    expect(isIgnored(button ?? el('<i></i>'))).toBe(false);
+  });
+});
+
+/*
+ * Matrix drive, HUD exposed and shown: any words the HUD writes (a plan line, a persona, a finding)
+ * could prove a text claim the app never made. A text claim reads the app's words only, hatch open
+ * or not; the HUD's controls stay reachable by role and test id.
+ */
+describe('the HUD never counts as the app for a text claim', () => {
+  const page = (): void => {
+    document.body.innerHTML = `
+      <main><p>Welcome back</p></main>
+      <div data-reticle-hud><p>Plan: ONLY-IN-HUD sign in</p><button data-testid="hud-run">Run Harness</button></div>`;
+  };
+
+  it('finds no text the HUD alone shows, with the hatch open', () => {
+    page();
+    setPresenterVisible(true);
+    expect(matchQuery({ text: 'ONLY-IN-HUD' }).matched).toBe(false);
+    expect(matchQuery({ text: 'Run Harness' }).matched).toBe(false);
+  });
+
+  it("still finds the app's own text, and the HUD's controls by test id", () => {
+    page();
+    setPresenterVisible(true);
+    expect(matchQuery({ text: 'Welcome back' }).matched).toBe(true);
+    expect(matchQuery({ testid: 'hud-run' }).matched).toBe(true);
   });
 });

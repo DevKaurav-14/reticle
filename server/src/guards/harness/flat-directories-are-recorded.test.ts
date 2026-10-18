@@ -112,14 +112,24 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
    * 18 with `disparity.ts` (the agent and Harness verdicts on one goal, compared) and
    * `instrumentation-coverage.ts` (how much of an app Reticle sees): verdict facts the HUD,
    * `doctor` and the platform all read.
+   *
+   * 19 with `check-sentence.ts`: a recorded check as a person's sentence. It sits beside the
+   * predicate it reads, and the platform can build the same sentence from the contract.
    */
-  'core/src/verdict': 18,
+  'core/src/verdict': 19,
   // 17 since `hold.ts`: `clampHoldMs` is the bound BOTH input paths clamp `holdMs` with, so it
   // belongs to the contract rather than to either caller. The reason it is a file of its own rather
   // than a line in `global-press.ts` is the one recorded below: `core/src/wire`'s filenames are
   // published API, and a page that only presses a key should not pull in the reader for a list of
   // them. Recorded rather than grouped, by the same rule as the note underneath.
-  'core/src/wire': 18,
+  // 19 with `next-step.ts`: a coded refusal's `next` steps and the connect command, which the error
+  // envelope carries to the agent. It needs `ReticleTool`, and `wire/constants` may not reach up
+  // into `wire` (the directory-reach guard refused it there).
+  'core/src/wire': 19,
+  // 11 with production mode's two wire leaves (`hello-mode.ts`, `production-policy.ts`) beside
+  // `response-body-reason.ts`. Recorded rather than grouped: a new directory in core is its own
+  // decision (core's directory-reach guard counts them), and these are constants like their neighbours.
+  'core/src/wire/constants': 11,
   // 16 since `snapshot-tree.ts`. The snapshot tree is a format the BROWSER writes and several
   // things on the Node side read back, and its parser was living beside the MCP tool handlers — so
   // every other reader imported from the tool surface to parse a string the tool surface does not
@@ -188,11 +198,14 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
    * revisits engine's public subpaths, not in a feature commit.
    */
   'engine/src/window': 11,
+  // Crossed the line at 11 with `prettier-config.ts`: the Prettier-usage detection that `detect()`
+  // needs, kept out of `patch/` to avoid a detect<->patch import cycle (#1560).
+  'init/src/detect': 11,
   // vite-env-types.ts owns the type-only environment declaration emitted by the dev-module generator.
   // +1: nuxt-snippets.ts, split out of snippets.ts when it crossed the 1000-line cap.
   // +3: angular.ts, remix.ts and static-page.ts — one per stack `init` learned to wire, each beside
   // the patchers of its kind rather than folded into snippets.ts, which is near the cap already.
-  'init/src/patch': 19,
+  'init/src/patch': 20,
   // Crossed the line at 11 with `plan-angular.ts` and `plan-electron-vite.ts`, one per stack `init`
   // learned to wire, each beside the other per-framework builders. 12 with `plan-vite.ts`: the Vite
   // plugin and capabilities steps every Vite-based stack composes, split out of `plan-framework.ts`
@@ -250,7 +263,7 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
   // connect line it shares; `judgement/runs` was the other home and is at its own recorded count.
   // 51 with `harness-gate.ts`: whether a Harness drive may start, split from `harness-explore.ts` at
   // its line cap; every gate caller already sits in this directory.
-  'server/src/surface/tools': 51,
+  'server/src/surface/tools': 52,
   // Crossed the line when a planned step gained its own `expect`: the grading rule and its test
   // joined the act cluster (preflight, target, retry, capsule). Recorded rather than grouped,
   // because this directory IS the grouping -- these files were split out of act-tools.ts when it
@@ -264,7 +277,10 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
    */
   // +3: durable.ts, after-match.ts and proved-controls.ts, what act_and_wait does once its
   // predicate holds.
-  'server/src/surface/tools/act': 16,
+  // 17 with `unsettled-find.ts` (#1259): whether a zero-match find was read while the last act was
+  // still landing. It reads the act's window through `settle-in-flight.ts`, which lives here, and
+  // `read/` is a pure leaf the reach guard keeps from importing it.
+  'server/src/surface/tools/act': 17,
   // 19 since `setup-mcp-cli.ts`: the terminal half of `reticle setup mcp`, which the one-line
   // installer runs before any project exists. It sits HERE and not in `setup/` because the reach
   // guard refused `command -> setup` and CLI handlers already live in this directory.
@@ -314,7 +330,9 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
   // pair is the whole rule.
   // 36 with `replay-from-hud.ts`: the ▶ replay a person starts from the HUD, moved out of
   // `server/src/index.ts` (at its cap) when it gained a progress push per step.
-  'server/src/language/flows': 36,
+  // 37 with `flow-replayable.ts`: whether a saved flow can replay at all, read by the save, the
+  // suite verdict and the suite selection, which all live here.
+  'server/src/language/flows': 37,
   // 12 since `drive-flow.ts`: the rule that turns a session's ambient tape into a flow per journey,
   // and the gate that refuses to save one asserting nothing. It sits beside `session-end.ts` because
   // teardown is the only caller and the tape is data by then — the reach guard already refused the

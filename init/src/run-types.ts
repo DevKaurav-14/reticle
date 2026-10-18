@@ -14,6 +14,8 @@ export interface InitOptions {
   captureBodies?: boolean | undefined;
   /** `--hooks`: also install the print-only Claude Code Stop hook. Off by default. */
   hooks?: boolean | undefined;
+  /** `--new-id`: replace the project id a copied `.reticle.json` carries with one for this checkout. */
+  newId?: boolean | undefined;
   cwd: string;
   port: number | undefined;
   mcp: boolean;

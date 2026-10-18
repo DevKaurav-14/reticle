@@ -17,6 +17,7 @@ import { ReticleTool } from '@reticlehq/core';
 import { asNumber, asString } from '@reticlehq/core';
 import { sessionIdShape, commandOrThrow } from './tool-kit.js';
 import { timeoutMsSchema } from './args/numeric-bounds.js';
+import { assertNotPaymentNavigation } from './act/act-danger.js';
 import type { ToolDef, ToolDeps } from './tool-kit.js';
 
 /** Said when a lease's page now has no Reticle SDK: only the browser can still act on it. */
@@ -137,6 +138,7 @@ export const BROWSER_TOOLS: ToolDef[] = [
       const requested = asString(args['url']);
       if (requested === undefined || 0 === requested.length)
         return { ok: false, reason: 'url required' };
+      assertNotPaymentNavigation(requested);
       const named = asString(args['sessionId']);
       // A lease whose page has no SDK right now (it was navigated to an image, a PDF, another site):
       // the page is still the lease's, so it is navigated through the browser and reattaches when it

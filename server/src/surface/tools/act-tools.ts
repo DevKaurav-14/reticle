@@ -14,7 +14,7 @@ import { aliasParam } from './args/alias-args.js';
 import { resolveSessionWithin } from '@/portal/session/timing/resolve-within.js';
 import { WALL_CLOCK } from '@/portal/session/timing/wall-clock.js';
 import { timeoutMsSchema } from './args/numeric-bounds.js';
-import { captureAct, captureVerdictedAct, pathOf } from '@/language/flows/replay.js';
+import { captureAct, captureVerdictedAct, pathOf, wroteSince } from '@/language/flows/replay.js';
 import { durableArg, durableOutput, reloadAndRecheck, withDurability } from './act/durable.js';
 
 import {
@@ -28,6 +28,7 @@ import {
   VerifiedReason,
   PredicateKind,
   type JournalVerdictEffect,
+  checkIntent,
 } from '@reticlehq/core';
 import { leanActResult, mutatedWithin } from './act/act-view.js';
 import { ReticleTool } from '@reticlehq/core';
@@ -54,7 +55,7 @@ import { inFlightRequestLabels, repeatedRequestLabels } from './act/settle-in-fl
 import { finishAfterMatch } from './act/after-match.js';
 import { noteProved } from './act/proved-controls.js';
 import { decideVerified } from '@reticlehq/engine/evidence/verified.js';
-import { honestyForVerdict } from '@reticlehq/engine/evidence/honesty.js';
+import { buildHonestyBlock, honestyForVerdict } from '@reticlehq/engine/evidence/honesty.js';
 import {
   declaredExpectations,
   declaresBodyIndependentChannel,
@@ -63,7 +64,6 @@ import { describeWaitTarget, namedNetIsInFlight } from '@reticlehq/engine/eviden
 import { saveFailedAssertCapsule } from './act-capsule.js';
 import { blastRadius, buildDivergenceCapsule, wireCapsule } from '@/judgement/capsule/capsule.js';
 import { predicateToExpectedLinks } from '@reticlehq/engine/question/predicate/predicate-to-links.js';
-import { buildHonestyBlock } from '@reticlehq/engine/evidence/honesty.js';
 import {
   absenceBlindSpotNote,
   buildCoverageStatement,
@@ -73,7 +73,7 @@ import {
   impeachesCapture,
 } from '@reticlehq/engine/evidence/blind-spots.js';
 import { acceptedWriteLabels } from '@reticlehq/engine/evidence/accepted-write.js';
-import { unreadWriteLabels } from '@reticlehq/engine/evidence/unread-outcome.js';
+import { unreadWriteLabels, unreadWriteReason } from '@reticlehq/engine/evidence/unread-outcome.js';
 import {
   evaluatePredicate,
   waitForPredicate,
@@ -92,7 +92,7 @@ import { asNumber, asRecord, asString } from '@reticlehq/core';
 import { sourceOf } from './tools-helpers.js';
 import { confirmedByDeclaration } from './act/act-danger.js';
 import { dispatchAct, preflightAct } from './act/act-preflight.js';
-import { checkNet, disabledTargetNote, followLostObservation } from './act/act-observation.js';
+import { actTargetNote, checkNet, followLostObservation } from './act/act-observation.js';
 import { type ToolDef, type ToolDeps, intentArg, sessionIdShape } from './tool-kit.js';
 import { verdictIntentGap } from '@reticlehq/engine/evidence/verdict-intent-gap.js';
 import { asActionType, gradeOf } from './act/act-helpers.js';
@@ -134,18 +134,19 @@ export async function actCommand(
   );
   // Sequence and act_and_wait dispatch through here without the ACT handler's tryRealInput.
   // A synthetic hover reports dispatched/settled while CSS :hover never applies — drive a real
-  // pointer when one is available, otherwise refuse rather than lie.
-  if (ActionType.HOVER === actArgs['action']) {
+  // pointer when one is available, otherwise refuse rather than lie. A press on a lease takes its
+  // real keyboard, as reticle_act does: a synthetic Tab moves no focus.
+  const hover = ActionType.HOVER === actArgs['action'];
+  if (hover || (ActionType.PRESS === actArgs['action'] && deps.realInput === undefined)) {
     const ref = asString(actArgs['ref']);
-    if (ref === undefined) throw new Error(HOVER_NEEDS_POINTER_MSG);
-    const real = await tryRealInput(deps, session, ref, ActionType.HOVER, actArgs);
-    if (real.result === undefined) throw new Error(HOVER_NEEDS_POINTER_MSG);
-    return {
-      kind: 'command_result',
-      id: 'hover',
-      ok: true,
-      result: { dispatched: true, settled: real.settled, ...asRecord(real.result) },
-    };
+    if (hover && ref === undefined) throw new Error(HOVER_NEEDS_POINTER_MSG);
+    const action = hover ? ActionType.HOVER : ActionType.PRESS;
+    const real = await tryRealInput(deps, session, ref ?? '', action, actArgs);
+    if (hover && real.result === undefined) throw new Error(HOVER_NEEDS_POINTER_MSG);
+    if (real.result !== undefined) {
+      const result = { dispatched: true, settled: real.settled, ...asRecord(real.result) };
+      return { kind: 'command_result', id: action, ok: true, result };
+    }
   }
   const bridgeArgs: Record<string, unknown> = { ...actArgs, args: rewritten };
   // What the acted element shows (test id, source) is noted in `Session.command`, Harness acts too.
@@ -157,7 +158,7 @@ export const ACT_TOOLS: ToolDef[] = [
     name: ReticleTool.ACT,
     example: { ref: 'e42', action: 'fill', args: { value: 'hello' } },
     description:
-      'Act WITHOUT checking the result — if the action is supposed to cause something, use reticle_act_and_wait { until } instead and get the verdict in the same call. This tool returns immediately with a `since` cursor; observe the reaction yourself with reticle_observe. Use it for actions with no observable consequence to assert (focus, hover, scrollIntoView, a fill you are about to submit). One action against a ref: click|dblclick|hover|focus|fill|type|clear|select|check|uncheck|submit|press|scrollIntoView. Carries effect:{dispatched,targetMatched,visible,enabled,focusMoved,valueChanged,domMutatedWithin,occluded,occludedBy,scrolledIntoView} to tell "action missed" from "app didn\'t react"; dispatched=landed, settled=a real frame flushed, and a settle timeout never fails the tool. Fields at their uninformative default are OMITTED so a clean action collapses to its consequence: an absent dispatched/targetMatched/visible/enabled means true, an absent occluded/scrolledIntoView/valueChanged/defaultPrevented means false, an absent focusMoved/occludedBy means null. occluded=true means the click point is covered by another element (a real user could not click it) — synthetic dispatch still delivered the event; scrolledIntoView=true means an off-viewport target was scrolled in first. effect.alreadyAtValue=true (check/uncheck only) means the box already read as the requested state, so NOTHING was dispatched and the app was never told — the DOM property is not evidence the application holds that value, so assert the app\'s own state (a signal, a request, a derived control), not the box. inputMode is "real" (native CDP, no synthetic effect block) or "synthetic"; clicks default to the occlusion-honest synthetic path even when CDP is configured — pass args.native:true to force a trusted native click (file pickers, clipboard). args.holdMs keeps the pointer DOWN for that long between mousedown and mouseup — the only way to drive a hold-to-confirm control (hold-to-delete, hold-to-record, long-press); effect.heldMs reports the hold actually achieved, which a throttled background tab can stretch. args.confirmDangerous is a permission gate and NOT a duration: it allows a destructive control, it does not hold one. inputModeReason explains any real→synthetic choice so it is never silent. Full model (real-input, throttled tabs, `reticle drive`): node_modules/@reticlehq/server/docs/usage.md §18.',
+      'Act WITHOUT checking the result — if the action is supposed to cause something, use reticle_act_and_wait { until } instead and get the verdict in the same call. This tool returns immediately with a `since` cursor; observe the reaction yourself with reticle_observe. Use it for actions with no observable consequence to assert (focus, hover, scrollIntoView, a fill you are about to submit). One action against a ref: click|dblclick|hover|focus|fill|type|clear|select|check|uncheck|submit|press|scrollIntoView. Carries effect:{dispatched,targetMatched,visible,enabled,focusMoved,valueChanged,domMutatedWithin,occluded,occludedBy,scrolledIntoView} to tell "action missed" from "app didn\'t react"; dispatched=landed, settled=a real frame flushed, and a settle timeout never fails the tool. Fields at their uninformative default are OMITTED so a clean action collapses to its consequence: an absent dispatched/targetMatched/visible/enabled means true, an absent occluded/scrolledIntoView/valueChanged/defaultPrevented means false, an absent focusMoved/occludedBy means null. occluded=true means the click point is covered by another element (a real user could not click it) — synthetic dispatch still delivered the event; scrolledIntoView=true means an off-viewport target was scrolled in first. effect.alreadyAtValue=true (check/uncheck only) means the box already read as the requested state, so NOTHING was dispatched and the app was never told — the DOM property is not evidence the application holds that value, so assert the app\'s own state (a signal, a request, a derived control), not the box. inputMode is "real" (native CDP, no synthetic effect block) or "synthetic"; clicks default to the occlusion-honest synthetic path even when CDP is configured — pass args.native:true to force a trusted native click (file pickers, clipboard). args.holdMs keeps the pointer DOWN for that long between mousedown and mouseup — the only way to drive a hold-to-confirm control (hold-to-delete, hold-to-record, long-press); effect.heldMs reports the hold actually achieved, which a throttled background tab can stretch. args.confirmDangerous is a permission gate and NOT a duration: it allows a destructive control, it does not hold one. inputModeReason explains any real→synthetic choice so it is never silent. On a leased tab a press uses the real keyboard: Tab moves focus, and a press with a ref focuses that element first, so Enter or Space presses it as a person would. Full model (real-input, throttled tabs, `reticle drive`): node_modules/@reticlehq/server/docs/usage.md §18.',
     inputSchema: {
       ref: z
         .string()
@@ -768,9 +769,8 @@ export const ACT_TOOLS: ToolDef[] = [
         });
         const outcomeUnread = unreadWriteLabels(windowEvents);
         const stillInFlight = inFlightRequestLabels(windowEvents, session.url, session.background);
-        // A click on a disabled control cannot cause anything: a miss there is not the app's.
-        const inconclusive =
-          verdict.inconclusive ?? disabledTargetNote(verdict.pass, actResult?.result);
+        // A click on a disabled control cannot cause anything, nor one no person could make.
+        const inconclusive = verdict.inconclusive ?? actTargetNote(verdict.pass, actResult?.result);
         const { decision, durable } = await withDurability(
           args['durable'],
           until,
@@ -801,7 +801,9 @@ export const ACT_TOOLS: ToolDef[] = [
             honesty,
             contradictions,
             ...(0 === outcomePending.length ? {} : { outcomePending }),
-            ...(outcomeUnread.length > 0 ? { outcomeUnread } : {}),
+            ...(outcomeUnread.length > 0
+              ? { outcomeUnread, outcomeUnreadReason: unreadWriteReason(windowEvents) }
+              : {}),
             // `settled` is genuinely optional: a wait that declared no predicate never measured it, and
             // passing `false` there would report "never settled" about something never asked to settle.
             ...(settledOutcome === undefined ? {} : { settled: settledOutcome }),
@@ -893,6 +895,7 @@ export const ACT_TOOLS: ToolDef[] = [
         verdictEffect = {
           claim: describeWaitTarget(until),
           verified: decision.verified,
+          ...checkIntent(until, verdict, asString(args['intent'])),
           ...(actedSourceLabel === undefined ? {} : { source: actedSourceLabel }),
           ...checkWords(verdict),
           // TRUE here, and false on the `assert` path, and the difference is the point. This tool
@@ -982,6 +985,7 @@ export const ACT_TOOLS: ToolDef[] = [
             routeBeforeWait,
             recordedVerdict,
             session.id,
+            wroteSince(acted, actedSince),
           );
         deps.recordings.markEnded(pathOf(currentOf(deps.sessions, session).url), session.id);
         acted.finishAction(

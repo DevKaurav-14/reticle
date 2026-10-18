@@ -48,7 +48,7 @@ import {
 } from '../../features/harness/platform/local-apps.js';
 import { serverOptionsFromEnv } from '../../features/harness/platform/server-driver.js';
 import { EXPLORE_TOOLS, driveForChat } from './explore-tools.js';
-import { MSG_NO_HARNESS_KEY, harnessLockRefusal, withLinkedCredential } from './harness-explore.js';
+import { harnessLockRefusal, withLinkedCredential } from './harness-explore.js';
 import { runTool } from './invoke-tool.js';
 import {
   announcedChannels,
@@ -60,6 +60,7 @@ import {
 import { probeDevServers } from '../../portal/session/dev-server/dev-server-probe.js';
 import {
   DriveOrigin,
+  noteHarnessWord,
   onDriveChange,
   onDriveStep,
   runningDrive,
@@ -71,7 +72,12 @@ import {
   requestFreeDrive,
   type FreeDrive,
 } from '../../features/harness/platform/platform-drives.js';
-import { HumanControlKind, type LinkUnsyncedRoot } from '@reticlehq/core';
+import {
+  CONNECT_COMMAND,
+  HARNESS_NOT_LINKED_HUMAN,
+  HumanControlKind,
+  type LinkUnsyncedRoot,
+} from '@reticlehq/core';
 import { onAgentsChange } from '../../hooks/coding-agents.js';
 
 /** Why a platform drive with no tab of its own runs no tool. */
@@ -416,8 +422,7 @@ const MSG_LINK_FAILED = 'Could not link this project. Run `reticle connect` in i
 /** A page with no projectId: linking it would bind a hash-named project nothing here reads. */
 const MSG_LINK_NEEDS_PROJECT =
   'This page did not say which project it is, so there is nothing to link yet. Run `npx @reticlehq/server init` in your app (or pass `projectId` to `connect()`), then Link.';
-const MSG_LINK_UNAVAILABLE =
-  'This Reticle cannot link from the panel. Run `reticle connect` in the project folder.';
+const MSG_LINK_UNAVAILABLE = `This Reticle cannot link from the panel. Run \`${CONNECT_COMMAND}\` in the project folder.`;
 /** Said on the HUD when Stop finds nothing to stop. */
 const MSG_NOTHING_DRIVING = 'No Harness drive is running in this tab.';
 const msgStartTrial = (url: string): string => `Start your trial: ${url}`;
@@ -444,19 +449,42 @@ export async function hudDrive(
 ): Promise<void> {
   if (HumanControlKind.HARNESS === request.kind) return applySwitch(request.enabled);
   // What the panel's Run and Stop answer belongs in the Harness log, and in the Agent Log as a summary.
-  const say = (text: string): void =>
+  const said: string[] = [];
+  const say = (text: string): void => {
+    said.push(text);
     deps.sessions.get?.(sessionId)?.pushNarration(text, true, { harness: true, summary: true });
+  };
   if (HumanControlKind.HARNESS_STOP === request.kind) {
     const running = runningDrive(sessionId);
     if (running === undefined || !stopDrive(running.harnessRun)) say(MSG_NOTHING_DRIVING);
     return;
   }
+  // Whatever stops a run before it drives is said on the Run row too, not only in the log: with the
+  // cloud unreachable, Run went to Starting… and back with no word on the page.
+  try {
+    await startHudRun(deps, sessionId, request, say, grant);
+  } catch (error) {
+    say(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (0 < said.length) noteHarnessWord(sessionId, said.join(' '));
+  }
+}
+
+/** Run Harness: the gate, the platform's grant, then the drive, saying why at each refusal. */
+async function startHudRun(
+  deps: ToolDeps,
+  sessionId: string,
+  request: { kind: typeof HumanControlKind.HARNESS_RUN; persona?: string },
+  say: (text: string) => void,
+  grant: (platform: { url: string; apiKey: string }) => Promise<FreeDrive>,
+): Promise<void> {
   // Before the grant: a drive the gate refuses must not take one. The panel shows the prompt.
   const env = await withLinkedCredential(deps, process.env, { sessionId });
   const locked = await harnessLockRefusal(deps, sessionId, env);
   if (locked !== undefined) return say(locked.split('\n')[0] ?? locked);
   const platform = serverOptionsFromEnv(env);
-  if (platform === undefined) return say(MSG_NO_HARNESS_KEY);
+  // The person's sentence: the agent's (`MSG_NO_HARNESS_KEY`) names tools they never call.
+  if (platform === undefined) return say(HARNESS_NOT_LINKED_HUMAN);
   const granted = await grant(platform);
   if (!granted.granted) {
     say(granted.message);
@@ -467,17 +495,13 @@ export async function hudDrive(
   }
   const explore = EXPLORE_TOOLS.find((tool) => ReticleTool.VERIFY_EXPLORE === tool.name);
   if (explore === undefined) return;
-  try {
-    await runTool(explore, deps, {
-      sessionId,
-      driveId: granted.driveId,
-      origin: DriveOrigin.HUD,
-      wait: 0,
-      ...(request.persona === undefined ? {} : { persona: request.persona }),
-    });
-  } catch (error) {
-    say(error instanceof Error ? error.message : String(error));
-  }
+  await runTool(explore, deps, {
+    sessionId,
+    driveId: granted.driveId,
+    origin: DriveOrigin.HUD,
+    wait: 0,
+    ...(request.persona === undefined ? {} : { persona: request.persona }),
+  });
 }
 
 /**
@@ -520,16 +544,29 @@ export function attachHudHarness(
   bridge.attachHarnessRequest((request, s) => {
     const root = s.artifactRoot ?? daemon.root;
     if (HumanControlKind.HARNESS_LINK === request.kind) {
-      const say = (text: string): void => daemon.deps().sessions.get?.(s.id)?.pushNarration(text);
-      if (link === undefined) return say(MSG_LINK_UNAVAILABLE);
-      if (isUnmatchedRoot(root)) return say(MSG_LINK_NEEDS_PROJECT);
+      // On the Harness page, where Link was pressed, and in the Agent Log. Said only in the log, a
+      // refusal left the page saying "Linking…" and nothing else.
+      const say = (text: string): void =>
+        daemon
+          .deps()
+          .sessions.get?.(s.id)
+          ?.pushNarration(text, true, { harness: true, summary: true });
+      const refuse = (text: string): void => {
+        say(text);
+        daemon.repaint();
+      };
+      if (link === undefined) return refuse(MSG_LINK_UNAVAILABLE);
+      if (isUnmatchedRoot(root)) return refuse(MSG_LINK_NEEDS_PROJECT);
       void link(root)
         .then((code) => say(0 === code ? MSG_LINKED : MSG_LINK_FAILED))
         .catch(() => say(MSG_LINK_FAILED))
         .finally(daemon.repaint);
       return;
     }
-    void hudDrive(daemon.deps(), s.id, request, (on) => applySwitch(root, on));
+    // Repainted after, so a refusal said on the Run row shows without waiting for another push.
+    void hudDrive(daemon.deps(), s.id, request, (on) => applySwitch(root, on)).finally(
+      daemon.repaint,
+    );
   });
   onDriveChange(daemon.repaint);
   // Each step too, so the panel's "N steps so far" counts up instead of sitting at zero.

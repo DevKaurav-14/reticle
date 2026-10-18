@@ -222,6 +222,8 @@ const DRIVE_MODEL_FLAG = '--drive-model';
  */
 const LICENSE_FLAG = '--license';
 const NO_INSTALL_FLAG = '--no-install';
+/** Give this checkout a project id of its own: a copied repository keeps the original's. */
+const NEW_ID_FLAG = '--new-id';
 export const HTTP_FLAG = '--http';
 export const HTTP_PORT_FLAG = '--http-port';
 export const HTTP_TOKEN_FLAG = '--http-token';
@@ -254,6 +256,7 @@ export type CliResult =
       url: string | undefined;
       timeoutSeconds: number | undefined;
       licenseKey: string | undefined;
+      newId: boolean;
     }
   | {
       kind: 'serve';
@@ -473,6 +476,7 @@ type InitFlags =
       url: string | undefined;
       timeoutSeconds: number | undefined;
       licenseKey: string | undefined;
+      newId: boolean;
     }
   | { kind: 'error'; message: string };
 
@@ -496,6 +500,7 @@ function parseInitFlags(args: string[]): InitFlags {
   let url: string | undefined;
   let timeoutSeconds: number | undefined;
   let licenseKey: string | undefined;
+  let newId = false;
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
@@ -560,6 +565,8 @@ function parseInitFlags(args: string[]): InitFlags {
       mcp = false;
     } else if (arg === NO_INSTALL_FLAG) {
       install = false;
+    } else if (arg === NEW_ID_FLAG) {
+      newId = true;
     } else if (arg === DRY_RUN_FLAG) {
       dryRun = true;
     } else if (arg === YES_FLAG) {
@@ -590,6 +597,7 @@ function parseInitFlags(args: string[]): InitFlags {
     url,
     timeoutSeconds,
     licenseKey,
+    newId,
   };
 }
 
@@ -707,6 +715,7 @@ export function parseCliArgs(
         url: r.url,
         timeoutSeconds: r.timeoutSeconds,
         licenseKey: r.licenseKey,
+        newId: r.newId,
       };
     }
     case SERVE_COMMAND: {

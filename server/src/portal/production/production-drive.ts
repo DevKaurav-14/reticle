@@ -341,6 +341,19 @@ const REFUSED_ID = 'production-policy';
 const NATIVE_REF = 'native';
 
 /**
+ * Where every driven command passes, and never in the page: through the drive's policy when a
+ * production nonce opened the session, straight through otherwise.
+ */
+export function gated(
+  drive: ProductionDrive | undefined,
+  name: string,
+  args: Record<string, unknown>,
+  send: (name: string, args: Record<string, unknown>) => Promise<CommandResult>,
+): Promise<CommandResult> {
+  return drive === undefined ? send(name, args) : drive.gate(name, args, send);
+}
+
+/**
  * Judge a native (CDP) gesture, which reaches the page without `Session.command`. Throws the
  * refusal so the gesture is never performed.
  */
