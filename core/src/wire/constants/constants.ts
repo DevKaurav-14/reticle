@@ -468,8 +468,8 @@ export type ContractReadError = (typeof ContractReadError)[keyof typeof Contract
 
 // The event vocabulary lives beside this file and is re-exported here, so `EventType` stays one
 // import path for every consumer. See event-types.ts for why it moved.
-import { EventType } from './event-types.js';
-export { EventType };
+import { EventType, MediaEvent } from './event-types.js';
+export { EventType, MediaEvent };
 
 /** Bounds for the per-session ring buffer. */
 export const RING_BUFFER_DEFAULTS = {

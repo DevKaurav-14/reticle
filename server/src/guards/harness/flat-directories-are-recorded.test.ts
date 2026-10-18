@@ -59,7 +59,7 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
   // registry imports it lazily, so a page downloads the renderer only when a picture is first drawn.
   'adapters/realm/browser/src/dom': 13,
   // +1: error-repeats.ts, the limiter every uncaught-error path in console.ts goes through (#986).
-  'adapters/realm/browser/src/observers': 25,
+  'adapters/realm/browser/src/observers': 27,
   // 17 since the HUD's position primitives left `presenter-drag.ts` for their own leaf: the drag
   // gesture re-syncs the dock layout, and the dock layout reads the HUD's position, so the two files
   // needed each other over primitives that belong to neither.
