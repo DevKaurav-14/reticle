@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { ReticleDir } from '@reticlehq/core';
 import {
   AGENT_MODEL_RECORD,
+  AGENT_STOP_RECORD,
   AGENT_TOOL_RECORD,
   MAX_TOOL_TEXT,
   captureToolCall,
@@ -303,5 +304,74 @@ describe('each agent payload, and the model behind it', () => {
       'copilot',
     );
     expect(records(dir)).toMatchObject([{ ok: false, error: { head: 'no such file' } }]);
+  });
+});
+
+/*
+ * The episode had no closing claim: what the agent said when it finished the turn. Each agent's
+ * end-of-turn hook, where its docs give the final message (2026-10-18): Claude Code and Codex
+ * `Stop` (`last_assistant_message`), Cursor `afterAgentResponse` (`text`), Gemini CLI `AfterAgent`
+ * (`prompt_response`), Windsurf `post_cascade_response` (`response`).
+ */
+describe("the agent's closing message", () => {
+  it('keeps each agent final message, redacted and bounded', () => {
+    const dir = project();
+    // A made-up key in the shape the redaction removes; not a real credential.
+    const fakeKey = ['sk', 'live', 'abcdefghijklmnop1234'].join('-');
+    run({
+      hook_event_name: 'Stop',
+      session_id: 's',
+      cwd: dir,
+      last_assistant_message: `Done. Key ${fakeKey}`,
+    });
+    run(
+      { hook_event_name: 'Stop', session_id: 'x', cwd: dir, last_assistant_message: null },
+      {},
+      'codex',
+    );
+    run(
+      {
+        hook_event_name: 'afterAgentResponse',
+        conversation_id: 'c',
+        cwd: dir,
+        model: 'm',
+        text: 'All set',
+      },
+      {},
+      'cursor',
+    );
+    run(
+      {
+        hook_event_name: 'AfterAgent',
+        session_id: 'g',
+        cwd: dir,
+        prompt: 'p',
+        prompt_response: 'x'.repeat(MAX_TOOL_TEXT * 2),
+      },
+      {},
+      'gemini',
+    );
+    captureToolCall(
+      'windsurf',
+      JSON.stringify({
+        agent_action_name: 'post_cascade_response',
+        trajectory_id: 't',
+        model_name: 'w',
+        tool_info: { response: 'Planner says done' },
+      }),
+      { cwd: dir, env: {}, now: () => 10_000 },
+    );
+    const stops = records(dir).filter((r) => AGENT_STOP_RECORD === r['kind']);
+    const by = (agent: string) => stops.find((r) => agent === r['agent']);
+    expect(stops).toHaveLength(5);
+    expect(JSON.stringify(stops)).not.toContain(fakeKey);
+    expect(by('claude-code')).toMatchObject({ agentSession: 's', message: { truncated: false } });
+    // Codex may send no message: the stop is still on record, with none invented.
+    expect(by('codex')?.['message']).toBeUndefined();
+    expect(by('cursor')).toMatchObject({ model: 'm', message: { head: 'All set' } });
+    expect(by('gemini')).toMatchObject({ message: { truncated: true } });
+    expect(by('windsurf')).toMatchObject({ message: { head: 'Planner says done' } });
+    // None of them is read as a tool call.
+    expect(records(dir).filter((r) => AGENT_TOOL_RECORD === r['kind'])).toHaveLength(0);
   });
 });

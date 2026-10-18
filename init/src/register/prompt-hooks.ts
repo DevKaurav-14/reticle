@@ -104,8 +104,8 @@ const cursorPostTool = (command: string): Record<string, unknown> => ({
  * Gemini CLI's AfterTool entry, for the one built-in tool name its reference gives
  * (`run_shell_command`). No background option is documented, and no timeout: the unit is unsettled.
  */
-/** Windsurf's post-action entry: the same `{ command }` its prompt hook takes (2026-10-18). */
-const windsurfPost = (command: string): Record<string, unknown> => ({ command });
+/** An entry that is only the command: Windsurf and Cursor events with no matcher (2026-10-18). */
+const commandOnly = (command: string): Record<string, unknown> => ({ command });
 
 /**
  * Copilot CLI's `postToolUse` entry. `matcher` is a full-match regex on `toolName`; `bash` and
@@ -124,6 +124,16 @@ const copilotPostTool = (command: string): Record<string, unknown> => ({
 const factoryPostTool = (command: string): Record<string, unknown> => ({
   matcher: 'Execute|Edit|ApplyPatch|Create|FetchUrl|WebSearch',
   hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_S }],
+});
+
+/** Codex's Stop entry, in the background like its post-tool one. */
+const codexStop = (command: string): Record<string, unknown> => ({
+  hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_S, async: true }],
+});
+
+/** Gemini CLI's AfterAgent entry: not a tool event, so no matcher. */
+const geminiAfterAgent = (command: string): Record<string, unknown> => ({
+  hooks: [{ type: 'command', command }],
 });
 
 const geminiAfterTool = (command: string): Record<string, unknown> => ({
@@ -179,6 +189,8 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
       // The model, which no other Claude Code event carries.
       { path: ['hooks', 'SessionStart'], entry: modelGroup, command: toolHookCommand },
       { path: ['hooks', 'PostModelSwitch'], entry: modelGroup, command: toolHookCommand },
+      // The closing message: Stop carries `last_assistant_message` (2026-10-18).
+      { path: ['hooks', 'Stop'], entry: modelGroup, command: toolHookCommand },
     ],
     projectMarkers: ['.claude'],
     homeMarkers: ['.claude'],
@@ -194,6 +206,8 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
       { path: ['hooks', 'beforeSubmitPrompt'], entry: (command) => ({ command }) },
       { path: ['hooks', 'postToolUse'], entry: cursorPostTool, command: toolHookCommand },
       { path: ['hooks', 'postToolUseFailure'], entry: cursorPostTool, command: toolHookCommand },
+      // Cursor's `stop` carries no text; `afterAgentResponse` carries the final message.
+      { path: ['hooks', 'afterAgentResponse'], entry: commandOnly, command: toolHookCommand },
     ],
     projectMarkers: ['.cursor'],
     homeMarkers: ['.cursor'],
@@ -207,6 +221,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     slots: [
       { path: ['hooks', 'UserPromptSubmit'], entry: group },
       { path: ['hooks', 'PostToolUse'], entry: codexPostTool, command: toolHookCommand },
+      { path: ['hooks', 'Stop'], entry: codexStop, command: toolHookCommand },
     ],
     projectMarkers: ['.codex'],
     homeMarkers: ['.codex'],
@@ -224,6 +239,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
         entry: (command) => ({ matcher: '*', hooks: [{ type: 'command', command }] }),
       },
       { path: ['hooks', 'AfterTool'], entry: geminiAfterTool, command: toolHookCommand },
+      { path: ['hooks', 'AfterAgent'], entry: geminiAfterAgent, command: toolHookCommand },
     ],
     projectMarkers: ['.gemini'],
     // The settings FILE: Antigravity shares `~/.gemini` and has no prompt hook.
@@ -238,8 +254,9 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     defaultPath: '.windsurf/hooks.json',
     slots: [
       { path: ['hooks', 'pre_user_prompt'], entry: (command) => ({ command }) },
-      { path: ['hooks', 'post_run_command'], entry: windsurfPost, command: toolHookCommand },
-      { path: ['hooks', 'post_write_code'], entry: windsurfPost, command: toolHookCommand },
+      { path: ['hooks', 'post_run_command'], entry: commandOnly, command: toolHookCommand },
+      { path: ['hooks', 'post_write_code'], entry: commandOnly, command: toolHookCommand },
+      { path: ['hooks', 'post_cascade_response'], entry: commandOnly, command: toolHookCommand },
     ],
     projectMarkers: ['.windsurf', '.devin'],
     homeMarkers: ['.codeium/windsurf'],

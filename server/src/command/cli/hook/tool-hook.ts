@@ -22,6 +22,24 @@ import { captureRoots } from './prompt-hook.js';
 export const AGENT_TOOL_RECORD = 'agent_tool';
 /** The `kind` of a record that only names the agent's model (Claude Code's session start). */
 export const AGENT_MODEL_RECORD = 'agent_model';
+/** The `kind` of the agent's closing message at the end of a turn. */
+export const AGENT_STOP_RECORD = 'agent_stop';
+
+/**
+ * The end-of-turn events whose payload carries the final message, and the field that holds it,
+ * from each vendor's hook reference (2026-10-18). Copilot CLI's `agentStop` and Factory Droid's
+ * `Stop` carry no message text, so they are not here.
+ */
+const STOP_MESSAGE_FIELD: Readonly<Record<string, string>> = {
+  // Claude Code and Codex.
+  Stop: 'last_assistant_message',
+  // Cursor.
+  afterAgentResponse: 'text',
+  // Gemini CLI.
+  AfterAgent: 'prompt_response',
+};
+/** Windsurf names its event in `agent_action_name`, and puts the text in `response`. */
+const WINDSURF_STOP = 'post_cascade_response';
 /** A result keeps this many characters; its full size is kept beside it. */
 export const MAX_TOOL_TEXT = 4_000;
 /** One argument string (a whole file a Write sends) keeps this many characters. */
@@ -133,6 +151,22 @@ export function toolRecordFrom(
     ...(session === undefined ? {} : { agentSession: session }),
     ...(model === undefined ? {} : { model }),
   };
+  const event = text(payload['hook_event_name']);
+  const field = event === undefined ? undefined : STOP_MESSAGE_FIELD[event];
+  const info = isObject(payload['tool_info']) ? payload['tool_info'] : {};
+  const windsurfStop = WINDSURF_STOP === payload['agent_action_name'];
+  if (field !== undefined || windsurfStop) {
+    const message = windsurfStop
+      ? (text(payload['response']) ?? text(info['response']))
+      : text(field === undefined ? undefined : payload[field]);
+    // A stop with no message (Codex sends null when it has none) is still the end of the turn.
+    return {
+      ...who,
+      kind: AGENT_STOP_RECORD,
+      ...(message === undefined ? {} : { message: resultOf(message, base) }),
+      at: now,
+    };
+  }
   if (tool === undefined) {
     // Claude Code names its model only at session start and on a switch, with no tool.
     return model === undefined ? undefined : { ...who, kind: AGENT_MODEL_RECORD, at: now };

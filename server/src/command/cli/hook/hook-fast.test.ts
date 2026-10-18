@@ -45,5 +45,8 @@ describe('the post-tool hook fast path', () => {
     expect(toolHookAck('cursor')).toBe('{}\n');
     expect(toolHookAck('gemini')).toBe('{}\n');
     expect(toolHookAck('claude-code')).toBe('');
+    // Codex's Stop needs JSON on stdout when it exits 0; its other hooks need nothing.
+    expect(toolHookAck('codex', '{"hook_event_name":"Stop"}')).toBe('{}\n');
+    expect(toolHookAck('codex', '{"hook_event_name":"PostToolUse"}')).toBe('');
   });
 });

@@ -17,6 +17,9 @@ export const TOOL_WRITE_ACTION = 'tool-write';
 const HOOK_COMMAND = 'hook';
 const CURSOR = 'cursor';
 const GEMINI = 'gemini';
+const CODEX = 'codex';
+/** Read without parsing: the fast path pays for every byte of work on every call. */
+const CODEX_STOP = /"hook_event_name"\s*:\s*"Stop"/;
 /** The payload is a few kilobytes. More than this is not a hook payload, and is not read. */
 const MAX_STDIN_BYTES = 1024 * 1024;
 /** An agent that never closes stdin must still get its answer. */
@@ -25,8 +28,10 @@ const STDIN_WAIT_MS = 3_000;
 const BIN = fileURLToPath(new URL('../../../../bin/reticle.js', import.meta.url));
 
 /** What the hook prints. Cursor and Gemini CLI read stdout as JSON; the rest need nothing. */
-export function toolHookAck(agent: string): string {
-  return CURSOR === agent || GEMINI === agent ? '{}\n' : '';
+export function toolHookAck(agent: string, payload = ''): string {
+  if (CURSOR === agent || GEMINI === agent) return '{}\n';
+  // Codex's Stop rejects plain text and wants JSON when it exits 0; its other hooks need nothing.
+  return CODEX === agent && CODEX_STOP.test(payload) ? '{}\n' : '';
 }
 
 interface FastIo {
@@ -40,7 +45,7 @@ export async function runToolHookFast(argv: readonly string[], io: FastIo): Prom
   const at = argv.indexOf('--agent');
   const agent = (-1 === at ? undefined : argv[at + 1]) ?? 'claude-code';
   const payload = await io.readStdin();
-  io.write(toolHookAck(agent));
+  io.write(toolHookAck(agent, payload));
   try {
     await io.spawnWriter([HOOK_COMMAND, TOOL_WRITE_ACTION, ...argv], payload);
   } catch {

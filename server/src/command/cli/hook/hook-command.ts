@@ -178,8 +178,9 @@ export async function handleHook(
   if (HookAction.TOOL === action || TOOL_WRITE_ACTION === action) {
     const at = argv.indexOf(AGENT_FLAG);
     const agent = (-1 === at ? undefined : argv[at + 1]) ?? DEFAULT_AGENT;
-    captureToolCall(agent, await readStdin(), { cwd, env: process.env, now: () => Date.now() });
-    if (HookAction.TOOL === action) process.stdout.write(toolHookAck(agent));
+    const payload = await readStdin();
+    captureToolCall(agent, payload, { cwd, env: process.env, now: () => Date.now() });
+    if (HookAction.TOOL === action) process.stdout.write(toolHookAck(agent, payload));
     return 0;
   }
   if (HookAction.EXPORT === action) {

@@ -69,7 +69,9 @@ describe('the prompt-capture hook in each agent config', () => {
     const out = installPromptHook(spec(PromptHookAgent.CLAUDE_CODE), existing);
     expect(out.status).toBe(PromptHookStatus.APPLY);
     expect(dig(out.content, 'model')).toBe('x');
-    expect(dig(out.content, 'hooks', 'Stop')).toHaveLength(1);
+    // Theirs stays first; ours (the closing-message hook) follows it.
+    expect(dig(out.content, 'hooks', 'Stop')).toHaveLength(2);
+    expect(dig(out.content, 'hooks', 'Stop', 0, 'hooks', 0, 'command')).toBe('stop.sh');
     expect(dig(out.content, 'hooks', 'UserPromptSubmit')).toHaveLength(2);
     expect(dig(out.content, 'hooks', 'UserPromptSubmit', 0, 'hooks', 0, 'command')).toBe(
       'theirs.sh',
@@ -223,6 +225,29 @@ describe('the prompt-capture hook in each agent config', () => {
     expect(dig(content(PromptHookAgent.FACTORY), 'PostToolUse', 0)).toEqual({
       matcher: 'Execute|Edit|ApplyPatch|Create|FetchUrl|WebSearch',
       hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.FACTORY), timeout: 30 }],
+    });
+  });
+
+  it("records each agent's closing message where its end-of-turn hook carries one", () => {
+    const content = (id: string): string => installPromptHook(spec(id), null).content;
+    expect(dig(content(PromptHookAgent.CLAUDE_CODE), 'hooks', 'Stop', 0, 'hooks', 0)).toMatchObject(
+      {
+        command: toolHookCommand(PromptHookAgent.CLAUDE_CODE),
+        async: true,
+      },
+    );
+    expect(dig(content(PromptHookAgent.CODEX), 'hooks', 'Stop', 0, 'hooks', 0)).toMatchObject({
+      command: toolHookCommand(PromptHookAgent.CODEX),
+      async: true,
+    });
+    expect(dig(content(PromptHookAgent.CURSOR), 'hooks', 'afterAgentResponse', 0)).toEqual({
+      command: toolHookCommand(PromptHookAgent.CURSOR),
+    });
+    expect(dig(content(PromptHookAgent.GEMINI), 'hooks', 'AfterAgent', 0)).toEqual({
+      hooks: [{ type: 'command', command: toolHookCommand(PromptHookAgent.GEMINI) }],
+    });
+    expect(dig(content(PromptHookAgent.WINDSURF), 'hooks', 'post_cascade_response', 0)).toEqual({
+      command: toolHookCommand(PromptHookAgent.WINDSURF),
     });
   });
 });
