@@ -170,8 +170,9 @@ export function promptHookStep(target: PromptHookTarget): Step {
   const { spec, path, existing } = target;
   const title = `${PROMPT_TITLE}: ${spec.label}`;
   const merged = installPromptHook(spec, existing);
+  const then = spec.activation === undefined ? '' : `. ${spec.activation}`;
   if (PromptHookStatus.ALREADY === merged.status) {
-    return { title, target: path, status: StepStatus.ALREADY, detail: 'hook already installed' };
+    return { title, target: path, status: StepStatus.ALREADY, detail: `hook already installed${then}` };
   }
   if (PromptHookStatus.MANUAL === merged.status) {
     return {
@@ -185,7 +186,7 @@ export function promptHookStep(target: PromptHookTarget): Step {
     title,
     target: path,
     status: StepStatus.APPLY,
-    detail: 'save each prompt to .reticle/ before the agent reads it; never blocks the prompt',
+    detail: `save each prompt to .reticle/ before the agent reads it; never blocks the prompt${then}`,
     write: { path, content: merged.content, expect: [promptHookCommand(spec.id)] },
   };
 }

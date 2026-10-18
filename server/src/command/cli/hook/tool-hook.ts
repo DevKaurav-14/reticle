@@ -55,6 +55,11 @@ const OFF_VALUES: ReadonlySet<string> = new Set(['0', 'false', 'off', 'no']);
 const JOURNAL_SETTING = 'journal';
 const UNKNOWN_SESSION = 'unknown';
 const BASH = 'Bash';
+/**
+ * Codex documents no error field on PostToolUse (2026-10-19): a failed shell command arrives like a
+ * passing one, so the absence of an error says nothing about its exit code.
+ */
+const NO_FAILURE_SIGNAL: ReadonlySet<string> = new Set(['codex']);
 const COPILOT_SUCCESS = 'success';
 const UNKNOWN_MODEL = 'Unknown';
 
@@ -201,7 +206,7 @@ export function toolRecordFrom(
       : { failureType: payload['failure_type'] }),
     ...(exit !== undefined
       ? { exitCode: Number(exit) }
-      : ok && BASH === tool
+      : ok && BASH === tool && !NO_FAILURE_SIGNAL.has(agent)
         ? { exitCode: 0 }
         : {}),
     ...(true === payload['is_interrupt'] ? { interrupted: true } : {}),

@@ -190,6 +190,25 @@ describe('each agent payload, and the model behind it', () => {
     ]);
   });
 
+  it('claims no exit code for a Codex shell command: a failed one arrives without an error field', () => {
+    const dir = project();
+    run(
+      {
+        session_id: 'x',
+        cwd: dir,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'npm test' },
+        tool_response: 'FAIL sum(2,3)=-1',
+      },
+      {},
+      'codex',
+    );
+    const [record] = records(dir);
+    expect(record).toMatchObject({ tool: 'Bash', ok: true });
+    expect(record?.['exitCode']).toBeUndefined();
+  });
+
   it('reads a Gemini CLI tool error from inside its response, and answers with JSON', () => {
     const dir = project();
     run(

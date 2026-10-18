@@ -109,7 +109,7 @@ export function promptCaptureRows(
   const targets = promptHookTargets(fileIo, projectDir, home, claudeCli, join);
   const rows = targets.map((t) =>
     promptHookInstalled(t.spec, t.existing)
-      ? `✓ ${t.spec.label}: hook installed (${t.path})`
+      ? `✓ ${t.spec.label}: hook installed (${t.path})${t.spec.activation === undefined ? '' : `. ${t.spec.activation}`}`
       : `✗ ${t.spec.label}: no hook; run \`reticle hook install\``,
   );
   rows.push(`MCP instructions only: ${MCP_FALLBACK_AGENTS.join(', ')}`);
@@ -136,6 +136,7 @@ function install(cwd: string, print: (line: string) => void): number {
       writeFileSync(target.path, merged.content);
       print(`✓ ${target.spec.label}: installed (${target.path})`);
     }
+    if (target.spec.activation !== undefined) print(`  ${target.spec.activation}`);
   }
   print(PROMPT_CAPTURE_NOTICE);
   return 0 === failed ? 0 : 1;

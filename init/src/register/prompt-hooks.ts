@@ -168,6 +168,8 @@ export interface PromptHookSpec {
   /** Home-relative directories that show the agent is on this machine. */
   readonly homeMarkers: readonly string[];
   readonly docs: string;
+  /** What the user must do before the agent runs a hook it was given, when writing it is not enough. */
+  readonly activation?: string;
 }
 
 /** `{ hooks: [{ type, command, timeout }] }`: Claude Code's group shape, which Codex and Factory copy. */
@@ -226,6 +228,10 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     projectMarkers: ['.codex'],
     homeMarkers: ['.codex'],
     docs: 'https://learn.chatgpt.com/docs/hooks',
+    // Codex runs a project hook only once its hash is trusted, and skips it silently until then:
+    // a headless `codex exec` ran a whole task here on 2026-10-19 and no hook fired.
+    activation:
+      'Codex runs these hooks only after you trust them: open `codex` here, type /hooks and trust the Reticle entries (again after an upgrade changes them). Its web search is a hosted tool that no hook sees.',
   },
   {
     id: PromptHookAgent.GEMINI,
