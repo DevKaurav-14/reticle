@@ -228,7 +228,8 @@ const COMMANDS: readonly CommandDoc[] = [
   },
   {
     name: 'hook',
-    synopsis: 'hook [install|uninstall|status|prompt --agent <id>|tool --agent <id>]',
+    synopsis:
+      'hook [install|uninstall|status|prompt --agent <id>|tool --agent <id>|export --structure]',
     summary: 'Save each prompt you send to .reticle/, through your agent hooks',
     group: HelpGroup.MORE,
     detail:
@@ -236,7 +237,8 @@ const COMMANDS: readonly CommandDoc[] = [
       '  hook uninstall    remove exactly the entries hook install added\n' +
       '  hook status       which agents capture prompts, and which rely on the MCP instructions\n' +
       '  hook prompt --agent <id>   what the agent hook runs; reads the prompt on stdin\n' +
-      '  hook tool --agent <id>     what the post-tool hook runs; keeps the call in .reticle/episodes/\n\n' +
+      '  hook tool --agent <id>     what the post-tool hook runs; keeps the call in .reticle/episodes/\n' +
+      '  hook export --structure    each snapshot step in .reticle/episodes/ as text-free page structure (JSONL)\n\n' +
       'Off for one project: "promptCapture": false in .reticle.json. Off on this machine:\n' +
       'RETICLE_PROMPT_CAPTURE=0. Tool calls follow the journal: "journal": false or RETICLE_JOURNAL=0.',
   },

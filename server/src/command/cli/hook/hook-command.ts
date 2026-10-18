@@ -20,21 +20,25 @@ import {
   promptHookTargets,
   uninstallPromptHook,
 } from '@reticlehq/init';
-import { ReticleEnv } from '@reticlehq/core';
+import { ReticleDir, ReticleEnv } from '@reticlehq/core';
 import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js';
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
 import { captureToolCall, toolHookAck } from './tool-hook.js';
+import { exportStructure } from './episode-structure.js';
 
 const HookAction = {
   PROMPT: 'prompt',
   /** What the agent's post-tool hook runs: one of the agent's own tool calls. */
   TOOL: 'tool',
+  /** The episodes, for a dataset: `--structure` is the text-free page structure per step. */
+  EXPORT: 'export',
   INSTALL: 'install',
   UNINSTALL: 'uninstall',
   STATUS: 'status',
 } as const;
 const AGENT_FLAG = '--agent';
+const STRUCTURE_FLAG = '--structure';
 /** An agent hook that names none is Claude Code's: the stand-in this command replaces was. */
 const DEFAULT_AGENT = 'claude-code';
 /** The payload is a few kilobytes. More than this is not a prompt payload, and is not read. */
@@ -175,6 +179,20 @@ export async function handleHook(
     process.stdout.write(toolHookAck(agent));
     return 0;
   }
+  if (HookAction.EXPORT === action) {
+    if (!argv.includes(STRUCTURE_FLAG)) {
+      print(
+        `hook export needs ${STRUCTURE_FLAG}: the text-free page structure is the only export.`,
+      );
+      return 1;
+    }
+    const root = join(projectDirOf(cwd), ReticleDir.ROOT);
+    const summary = exportStructure(root, (line) => process.stdout.write(`${line}\n`));
+    process.stderr.write(
+      `${String(summary.steps)} snapshot steps exported; ${String(summary.skippedCut)} cut short and skipped\n`,
+    );
+    return 0;
+  }
   if (HookAction.INSTALL === action) return install(cwd, print);
   if (HookAction.UNINSTALL === action) return uninstall(cwd, print);
   if (HookAction.STATUS === action) {
@@ -183,7 +201,7 @@ export async function handleHook(
     return 0;
   }
   print(
-    `unknown hook action: ${action}. Use install, uninstall, status, prompt --agent <id> or tool --agent <id>.`,
+    `unknown hook action: ${action}. Use install, uninstall, status, prompt --agent <id>, tool --agent <id> or export --structure.`,
   );
   return 1;
 }
