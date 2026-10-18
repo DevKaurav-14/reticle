@@ -5,8 +5,10 @@
  * recording, exactly like one that drew the right one.
  */
 import { describe, expect, it } from 'vitest';
-import { EventType } from '@reticlehq/core';
-import { digestPixels, installCanvas, type CanvasSample } from './canvas.js';
+import { EventType, ReticleCommand } from '@reticlehq/core';
+import { createCommandRegistry } from '@/commands/commands.js';
+import { refs } from '@/dom/addressing/refs.js';
+import { CanvasTrigger, digestPixels, installCanvas, type CanvasSample } from './canvas.js';
 
 const solid = (r: number, g: number, b: number): CanvasSample => {
   const data = new Uint8ClampedArray(16 * 16 * 4);
@@ -45,6 +47,43 @@ describe('the canvas digest', () => {
     tick();
     teardown();
     expect(events.map((e) => e.type)).toEqual([EventType.CANVAS_DIGEST, EventType.CANVAS_DIGEST]);
-    expect(events[1]?.data).toMatchObject({ width: 300, height: 150, mean: [0, 0, 255] });
+    expect(events[1]?.data).toMatchObject({
+      width: 300,
+      height: 150,
+      mean: [0, 0, 255],
+      trigger: CanvasTrigger.POLL,
+    });
+  });
+});
+
+/*
+ * A digest on a 500 ms timer is not tied to the action that caused it: the frame a click drew could
+ * land in the next timer tick, after another action. So an act ends with its own sample, sent even
+ * when nothing changed (a click that drew nothing is the finding), inside the act's window.
+ */
+describe('the canvas digest after an act', () => {
+  it('samples every canvas when an act settles, before the act answers', async () => {
+    document.body.innerHTML = '<button>Draw</button><canvas></canvas>';
+    let frame = solid(255, 0, 0);
+    const events: { type: EventType; data: Record<string, unknown> }[] = [];
+    const teardown = installCanvas((type, data) => events.push({ type, data }), {
+      sample: () => frame,
+      every: () => () => undefined,
+    });
+    const button = document.querySelector('button') as HTMLButtonElement;
+    button.addEventListener('click', () => {
+      frame = solid(0, 255, 0);
+    });
+    const act = createCommandRegistry().get(ReticleCommand.ACT);
+    if (act === undefined) throw new Error('no act handler');
+    await act({ ref: refs.refFor(button), action: 'click' });
+    // A second act that draws nothing still reports what the canvas shows.
+    await act({ ref: refs.refFor(button), action: 'click' });
+    teardown();
+    const digests = events.filter((e) => EventType.CANVAS_DIGEST === e.type);
+    expect(digests.map((e) => [e.data['trigger'], e.data['mean']])).toEqual([
+      [CanvasTrigger.ACT, [0, 255, 0]],
+      [CanvasTrigger.ACT, [0, 255, 0]],
+    ]);
   });
 });

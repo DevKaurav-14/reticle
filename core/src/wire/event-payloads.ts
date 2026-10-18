@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EventType, MediaEvent, PerfMetric } from './constants/constants.js';
+import { CanvasTrigger, EventType, MediaEvent, PerfMetric } from './constants/constants.js';
 import { BlindSpotKind } from '@/verdict/verified-constants.js';
 import { BrowserBrand } from '@/telemetry-feedback.js';
 import { HudUseDataSchema, HumanControlDataSchema, HumanMarkDataSchema } from './messages.js';
@@ -348,6 +348,11 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     height: z.number().int().nonnegative(),
     /** The sample's mean colour, `[r, g, b]` 0–255: a coarse "what colour is it" a reader can check. */
     mean: z.tuple([z.number(), z.number(), z.number()]),
+    /**
+     * `act` when an act's end took it, inside the act's window and sent even if nothing changed;
+     * `poll` when the timer did. Absent from an SDK older than the field.
+     */
+    trigger: z.nativeEnum(CanvasTrigger).optional(),
   }),
 } satisfies Record<EventType, z.ZodTypeAny>;
 

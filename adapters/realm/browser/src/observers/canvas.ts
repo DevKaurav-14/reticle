@@ -1,4 +1,6 @@
-import { EventType } from '@reticlehq/core';
+import { CanvasTrigger, EventType } from '@reticlehq/core';
+
+export { CanvasTrigger };
 import { refs } from '@/dom/addressing/refs.js';
 import { nativeSetInterval } from '@/timers/native/native-timers.js';
 import { observeSafely, observeValue, type Emit, type Teardown } from './types.js';
@@ -69,26 +71,43 @@ interface CanvasOptions {
   every?: (run: () => void, ms: number) => () => void;
 }
 
+/** The installed observer's sampler, for `canvasAfterAct`. One page, one observer. */
+let sampleAll: ((trigger: CanvasTrigger) => void) | undefined;
+
+/**
+ * Sample every canvas at the end of an act, sent even when nothing changed: a click that drew
+ * nothing is the finding. Called before the act answers, so the event falls in the act's window
+ * and is attributed to it. Does nothing when the observer is not installed.
+ */
+export function canvasAfterAct(): void {
+  sampleAll?.(CanvasTrigger.ACT);
+}
+
 export function installCanvas(emit: Emit, opts: CanvasOptions = {}): Teardown {
   const sample = opts.sample ?? sampleCanvas;
   const every = opts.every ?? nativeSetInterval;
   const last = new WeakMap<HTMLCanvasElement, string>();
-  const look = (): void => {
+  const look = (trigger: CanvasTrigger): void => {
     observeSafely(() => {
       const canvases = Array.from(document.querySelectorAll('canvas')).slice(0, MAX_CANVASES);
       for (const canvas of canvases) {
         const read = sample(canvas);
         if (read === undefined) continue;
         const { digest, mean } = digestPixels(read.data);
-        if (last.get(canvas) === digest) continue;
+        if (CanvasTrigger.POLL === trigger && last.get(canvas) === digest) continue;
         last.set(canvas, digest);
         emit(
           EventType.CANVAS_DIGEST,
-          { digest, width: read.width, height: read.height, mean },
+          { digest, width: read.width, height: read.height, mean, trigger },
           refs.refFor(canvas),
         );
       }
     });
   };
-  return every(look, POLL_MS);
+  sampleAll = look;
+  const stop = every(() => look(CanvasTrigger.POLL), POLL_MS);
+  return () => {
+    stop();
+    if (sampleAll === look) sampleAll = undefined;
+  };
 }

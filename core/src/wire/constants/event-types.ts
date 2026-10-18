@@ -146,3 +146,10 @@ export const MediaEvent = {
   ERROR: 'error',
 } as const;
 export type MediaEvent = (typeof MediaEvent)[keyof typeof MediaEvent];
+
+/** What took a `CANVAS_DIGEST`: the 500 ms poll, or the end of an act (inside its window). */
+export const CanvasTrigger = {
+  POLL: 'poll',
+  ACT: 'act',
+} as const;
+export type CanvasTrigger = (typeof CanvasTrigger)[keyof typeof CanvasTrigger];
