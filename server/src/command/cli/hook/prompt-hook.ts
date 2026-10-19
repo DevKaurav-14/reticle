@@ -16,11 +16,13 @@
  */
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
@@ -161,9 +163,15 @@ function keepIn(root: string, agent: string, prompt: string, at: number): boolea
   }
   const historyPath = join(root, ReticleDir.REQUESTS_LOG_FILE);
   // ponytail: one rotated file; older history is dropped once a second one fills.
-  if (existsSync(historyPath) && MAX_HISTORY_BYTES < statSync(historyPath).size) {
-    renameSync(historyPath, join(root, HISTORY_ROTATED));
+  // The size comes from the open file, not a second look at the path, which can change between.
+  const fd = openSync(historyPath, 'a');
+  let full = false;
+  try {
+    full = MAX_HISTORY_BYTES < fstatSync(fd).size;
+  } finally {
+    closeSync(fd);
   }
+  if (full) renameSync(historyPath, join(root, HISTORY_ROTATED));
   appendFileSync(historyPath, `${JSON.stringify({ at, agent, request: context.request })}\n`);
   return true;
 }

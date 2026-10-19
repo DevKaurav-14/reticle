@@ -140,6 +140,72 @@ describe('parallel fan-out is not a race', () => {
     },
   );
 
+  // #1677: the set held `pageSize` and `per_page` verbatim, so `page_size` counted as selecting and a
+  // page query racing its own count query was reported. Each pair below is applied, so it is silent
+  // only because the parameter enumerates.
+  describe('an enumerating parameter in any of its spellings', () => {
+    const race = (one: string, two: string) =>
+      findStaleResponses([
+        pending(0, `/api/items?page=1&${one}`, 'a'),
+        pending(60, `/api/items?page=1&${two}`, 'b'),
+        settled(100, 'b'),
+        settled(900, 'a'),
+        applied(900),
+      ]);
+
+    it.each([
+      ['page_size=25', 'page_size=1'],
+      ['page-size=25', 'page-size=1'],
+      ['pagesize=25', 'pagesize=1'],
+      ['PageSize=25', 'PageSize=1'],
+      ['page[size]=25', 'page[size]=1'],
+      ['per-page=25', 'per-page=1'],
+      ['pageNumber=1', 'pageNumber=2'],
+      ['page[number]=1', 'page[number]=2'],
+      ['take=25', 'take=1'],
+      ['skip=0', 'skip=25'],
+      ['$skip=0', '$skip=25'],
+      ['$top=25', '$top=1'],
+      ['first=25', 'first=1'],
+    ])('stays silent for %s against %s', (one, two) => {
+      expect(race(one, two)).toEqual([]);
+    });
+
+    it('still reports a race when a selecting parameter changed alongside it', () => {
+      const found = race('status=open&page_size=25', 'status=held&page_size=1');
+      expect(found).toHaveLength(1);
+      expect(found[0]?.kind).toBe(ContradictionKind.STALE_RESPONSE_APPLIED);
+    });
+
+    // A window selects: `last=30d` makes `last=7d` obsolete, so it is left out of the set on purpose.
+    it('still reports a race on `last`, which names a window rather than a page', () => {
+      expect(race('last=7d', 'last=30d')).toHaveLength(1);
+    });
+
+    // The names alone used to decide it, so a filter that happened to use one of them was paging.
+    it.each([
+      ['first=John', 'first=Jane'],
+      ['size=S', 'size=XL'],
+      ['start=2026-01-01', 'start=2026-02-01'],
+      ['start=2026-01-01&end=2026-01-31', 'start=2026-02-01&end=2026-02-28'],
+      ['after=2026-01-01', 'after=2026-02-01'],
+      ['before=2026-01-01T00:00:00Z', 'before=2026-02-01T00:00:00Z'],
+    ])('still reports a race when %s becomes %s, a filter in a paging name', (one, two) => {
+      const found = race(one, two);
+      expect(found).toHaveLength(1);
+      expect(found[0]?.kind).toBe(ContradictionKind.STALE_RESPONSE_APPLIED);
+    });
+
+    it.each([
+      ['start=0&end=25', 'start=25&end=50'],
+      ['after=eyJpZCI6MTB9', 'after=eyJpZCI6MjB9'],
+      ['before=cur_9', 'before=cur_19'],
+      ['cursor=x', 'cursor=y'],
+    ])('stays silent for %s against %s, a position or a cursor', (one, two) => {
+      expect(race(one, two)).toEqual([]);
+    });
+  });
+
   it('STILL reports a race when a selecting parameter changed alongside the page', () => {
     // Changing the filter is what makes the older request obsolete; that the page moved too is
     // incidental, and treating the pair as enumeration would hide a real race.

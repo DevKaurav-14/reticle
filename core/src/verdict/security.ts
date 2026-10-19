@@ -27,8 +27,16 @@
  * permission flag — and a guard that fires on a control it was never written to catch trains agents
  * to route around it, which generalises to the buttons that DO matter.
  */
-const DANGEROUS_ACTION =
-  /\b(delete|remove|destroy|erase|drop|terminate|revoke|reset|close account|cancel subscription|purchase|buy|pay|payment|place order|confirm order|send money|send funds|transfer|withdraw|refund)\b/i;
+const DESTROY_WORDS =
+  'delete|remove|destroy|erase|drop|terminate|revoke|reset|close account|cancel subscription';
+const MONEY_WORDS =
+  'purchase|buy|pay|payment|place order|confirm order|send money|send funds|transfer|withdraw|refund';
+const DANGEROUS_ACTION = new RegExp(`\\b(${DESTROY_WORDS}|${MONEY_WORDS})\\b`, 'i');
+/** Only the words that destroy something. A link target is judged by these, not by money words. */
+const DESTROY_ACTION = new RegExp(`\\b(${DESTROY_WORDS})\\b`, 'i');
+
+/** Underscores and hyphens join words in names and paths: `delete_account`, `close-account`. */
+const WORD_JOINERS = /[_-]+/g;
 
 /**
  * Roles that pick a VALUE, not perform an action. Selecting "Payment" as a document type is not a
@@ -51,12 +59,19 @@ const VALUE_PICKER_ROLES: ReadonlySet<string> = new Set(['option', 'radio']);
 /** The hostnames that ARE loopback outright, with no parsing: the name, and IPv6 ::1 both ways. */
 const LOOPBACK_HOSTNAMES: readonly string[] = ['localhost', '::1', '0:0:0:0:0:0:0:1'];
 
+/** The suffix of a name RFC 6761 reserves for loopback (`app.localhost`, `feat.app.localhost`). */
+const LOCALHOST_SUFFIX = '.localhost';
+
 /** IPv4 loopback is the whole 127.0.0.0/8 block, so the first octet is the entire test. */
 const IPV4_LOOPBACK_FIRST_OCTET = '127';
 const IPV4_OCTET_COUNT = 4;
 const IPV4_OCTET_MAX = 255;
 
-/** True only for literal loopback hosts, never lookalike DNS names such as 127.example.com. */
+/**
+ * True only for literal loopback hosts and `localhost`, never a lookalike DNS name such as
+ * 127.example.com. Names under `.localhost` are not included: this is the guard against DNS
+ * rebinding, and a browser that sends those names to DNS lets a hostile network answer them.
+ */
 export function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (LOOPBACK_HOSTNAMES.includes(normalized)) return true;
@@ -73,18 +88,25 @@ export function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
+ * True for a name under `.localhost`, such as the `<branch>.<app>.localhost` a dev proxy serves for
+ * each git worktree. RFC 6761 reserves these names for loopback, and browsers resolve them locally.
+ */
+export function isLocalhostSubdomain(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized.endsWith(LOCALHOST_SUFFIX) &&
+    normalized.length > LOCALHOST_SUFFIX.length &&
+    !normalized.startsWith('.')
+  );
+}
+
+/**
  * Page protocols that mean "this document IS a local desktop app", not a website. A packaged
  * Electron renderer loads over `file:` (or a registered `app:` protocol); a Tauri webview loads over
  * `tauri:` on macOS/Linux. None of these can be reached by a remote attacker — there is no network
  * origin to serve them from — so a page on one is as local as `http://localhost`.
  */
 const LOCAL_APP_PROTOCOLS: readonly string[] = ['file:', 'app:', 'tauri:'];
-
-/**
- * The hostname Tauri v2 uses on Windows (and Android), where the webview needs a real http origin.
- * `.localhost` is reserved for loopback by RFC 6761, so this can never resolve to a remote host.
- */
-const TAURI_HTTP_HOSTNAME = 'tauri.localhost';
 
 /**
  * True when the page is local: an ordinary loopback document, or a desktop webview.
@@ -94,9 +116,9 @@ const TAURI_HTTP_HOSTNAME = 'tauri.localhost';
  * remote is what made Reticle refuse to start inside a packaged Electron or Tauri app.
  */
 export function isLocalPage(protocol: string, hostname: string): boolean {
-  if (isLoopbackHostname(hostname)) return true;
-  if (LOCAL_APP_PROTOCOLS.includes(protocol.toLowerCase())) return true;
-  return hostname.toLowerCase() === TAURI_HTTP_HOSTNAME;
+  // `isLocalhostSubdomain` also covers `tauri.localhost`, the http origin Tauri v2 uses on Windows.
+  if (isLoopbackHostname(hostname) || isLocalhostSubdomain(hostname)) return true;
+  return LOCAL_APP_PROTOCOLS.includes(protocol.toLowerCase());
 }
 
 /**
@@ -128,7 +150,23 @@ export function isOpaqueOrigin(origin: string): boolean {
  */
 export function isDangerousActionText(text: string, role?: string): boolean {
   if (role !== undefined && VALUE_PICKER_ROLES.has(role.trim().toLowerCase())) return false;
-  return DANGEROUS_ACTION.test(text.replace(/[_-]+/g, ' '));
+  return DANGEROUS_ACTION.test(text.replace(WORD_JOINERS, ' '));
+}
+
+/**
+ * Is following a link to this href destructive? A link that navigates is a GET: opening a page moves
+ * no money, so a money word in a same-app path (`/billing/payment`) is not a reason to refuse it.
+ * Typing card details has its own guard. The href is dangerous when its path destroys something
+ * (`/account/delete`), or when it goes to a payment provider.
+ */
+/** An href that goes nowhere (`#…`, `javascript:`): the link is a button, judged by its words. */
+const INERT_HREF = /^\s*(#.*|javascript:.*)?$/i;
+export function isInertHref(href: string): boolean {
+  return INERT_HREF.test(href);
+}
+
+export function isDangerousNavigation(href: string): boolean {
+  return isPaymentProviderUrl(href) || DESTROY_ACTION.test(href.replace(WORD_JOINERS, ' '));
 }
 
 // ── What the Harness may press ────────────────────────────────────────────────────────────────

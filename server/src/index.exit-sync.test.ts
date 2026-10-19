@@ -4,7 +4,7 @@
  * `reticle sync` that nobody typed. `close()` now sends one bounded cycle, and only for a linked root.
  */
 import { createServer, type Server } from 'node:http';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -47,46 +47,23 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-/**
- * Linked the way background sync requires: the folder's own `cloud.json`, a key for it, and
- * somebody signed in to that address. A key in the environment alone links nothing.
- */
-function linkAndSignIn(reticleRoot: string): void {
-  const home = String(process.env[HOME_ENV]);
-  mkdirSync(reticleRoot, { recursive: true });
-  writeFileSync(
-    join(reticleRoot, 'cloud.json'),
-    JSON.stringify({ projectId: 'demo', url: cloudUrl }),
-  );
-  mkdirSync(join(home, '.reticle'), { recursive: true });
-  writeFileSync(
-    join(home, '.reticle', 'credentials.json'),
-    JSON.stringify({ [`${cloudUrl}::demo`]: 'rk_test' }),
-  );
-  writeFileSync(
-    join(home, '.reticle', 'session.json'),
-    JSON.stringify({ url: cloudUrl, token: 'token', orgName: 'test' }),
-  );
-}
-
-async function startAndClose(linked = false): Promise<void> {
+async function startAndClose(): Promise<void> {
   port += 1;
   const reticleRoot = join(mkdtempSync(join(tmpdir(), 'reticle-exit-sync-')), '.reticle');
-  if (linked) linkAndSignIn(reticleRoot);
   const running = await start({ port, mcp: false, reticleRoot });
   await running.close();
 }
 
 describe('start() sends one sync cycle on close', () => {
   it('reaches the cloud when the folder is linked', async () => {
-    delete process.env[KEY_ENV];
+    process.env[KEY_ENV] = 'rk_test';
     process.env[URL_ENV] = cloudUrl;
-    await startAndClose(true);
+    await startAndClose();
     expect(hits).toBeGreaterThan(0);
   });
 
-  it('sends nothing when the folder is not linked, whatever the environment says', async () => {
-    process.env[KEY_ENV] = 'rk_test';
+  it('sends nothing when the folder is not linked', async () => {
+    delete process.env[KEY_ENV];
     process.env[URL_ENV] = cloudUrl;
     await startAndClose();
     expect(hits).toBe(0);

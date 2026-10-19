@@ -1,5 +1,5 @@
 /**
- * Whether the daemon's background sync may send a project's work, and whether there is work to send.
+ * Whether the daemon's background sync may send a project's work.
  *
  * The daemon sends without anybody asking, so it sends only when every one of these holds:
  *
@@ -13,11 +13,9 @@
  *
  * `reticle sync` stays the explicit way to send now, and none of this applies to it.
  */
-import { readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { ReticleDir, ReticleEnv } from '@reticlehq/core';
+import { dirname } from 'node:path';
+import { ReticleEnv } from '@reticlehq/core';
 import { projectSetting } from '@/memory/intent/record-request.js';
-import { DERIVED_RECORDS } from './sync-cycle.js';
 import type { ProjectCloud } from './cloud-config.js';
 
 export const BackgroundSyncState = {
@@ -87,37 +85,4 @@ export function backgroundSyncGate(input: {
     why: `sends to ${cloud.config.url}`,
     credential: `${cloud.config.apiKey}\u0000${token}`,
   };
-}
-
-/** Every file and folder a cycle reads, relative to the `.reticle` root. One level down is read too. */
-const SYNCED_PATHS: readonly string[] = [
-  ReticleDir.RUNS_SUBDIR,
-  ReticleDir.FLOWS_SUBDIR,
-  ReticleDir.CAPSULES_SUBDIR,
-  ReticleDir.INTENT_SUBDIR,
-  ReticleDir.REQUEST_FILE,
-  ReticleDir.REQUESTS_LOG_FILE,
-  ReticleDir.CLOUD_LINK_FILE,
-  ...DERIVED_RECORDS.map((record) => record.file),
-];
-
-/**
- * A cheap summary of everything a cycle would send: name, size and modified time of each synced file.
- * The same value twice means nothing changed, so the tick makes no network call. The content hash
- * that decides WHAT to send stays in the cycle, which compares it with what the platform holds.
- */
-export function localFingerprint(reticleRoot: string): string {
-  const parts: string[] = [];
-  const stamp = (path: string, depth: number): void => {
-    try {
-      const stat = statSync(path);
-      parts.push(`${path}:${String(stat.size)}:${String(stat.mtimeMs)}`);
-      if (!stat.isDirectory() || 0 === depth) return;
-      for (const name of readdirSync(path).sort()) stamp(join(path, name), depth - 1);
-    } catch {
-      parts.push(`${path}:absent`);
-    }
-  };
-  for (const rel of SYNCED_PATHS) stamp(join(reticleRoot, rel), 2);
-  return parts.join('\n');
 }

@@ -37,6 +37,11 @@ export interface SharedServer {
    * Must be called before listen.
    */
   attachMcp(factory: (peerSkew?: string, agentSession?: string) => McpServer): void;
+  /**
+   * SDK version of each page connected when an agent attaches.
+   * The daemon skew advice reads this so it does not tell the agent to restart over matching pages.
+   */
+  attachPageSdkVersions(provider: () => readonly (string | undefined)[]): void;
   /** Register the JSON the daemon returns from GET /status (live sessions + health for `reticle status`). */
   /** `held`: the request carried STATUS_HOLD_QUERY — a setup run is waiting on this daemon. */
   attachStatus(provider: (held: boolean) => unknown): void;
@@ -80,6 +85,7 @@ export interface SharedServer {
 export function createSharedServer(options: { token?: string } = {}): SharedServer {
   type McpFactory = (peerSkew?: string, agentSession?: string) => McpServer;
   let mcpFactory: McpFactory | undefined;
+  let pageSdkVersions: () => readonly (string | undefined)[] = () => [];
   let statusProvider: ((held: boolean) => unknown) | undefined;
   let driveProvider: ((url: string) => Promise<unknown>) | undefined;
   let agentPresence: ((connected: boolean) => void) | undefined;
@@ -222,6 +228,7 @@ export function createSharedServer(options: { token?: string } = {}): SharedServ
       const peerSkew = agentPeerSkew(
         url.searchParams.get(PEER_VERSION_PARAM),
         url.searchParams.get(PEER_CONTRACT_PARAM),
+        pageSdkVersions(),
       );
       if (mcpFactory === undefined) {
         res.writeHead(503, { 'Content-Type': 'text/plain' });
@@ -324,6 +331,10 @@ export function createSharedServer(options: { token?: string } = {}): SharedServ
     mcpFactory = factory;
   }
 
+  function attachPageSdkVersions(provider: () => readonly (string | undefined)[]): void {
+    pageSdkVersions = provider;
+  }
+
   function announceShutdown(): void {
     for (const [sid, stream] of sseStreams) {
       try {
@@ -377,6 +388,7 @@ export function createSharedServer(options: { token?: string } = {}): SharedServ
   return {
     httpServer,
     attachMcp,
+    attachPageSdkVersions,
     attachStatus,
     attachDrive,
     attachAgentPresence,

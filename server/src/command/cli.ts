@@ -231,8 +231,8 @@ async function handleInit(parsed: {
       ...(parsed.url === undefined ? {} : { url: parsed.url }),
       captureBodies: true === parsed.captureBodies,
       hooks: true === parsed.hooks,
-      promptCapture: false !== parsed.promptCapture,
       newId: true === parsed.newId,
+      promptCapture: false !== parsed.promptCapture,
       // The outcome is reported by confirmInstall instead, once it knows whether an app connected —
       // `init` writing files was never the same thing as `init` working (#269).
       deferOutcome: true,

@@ -1,4 +1,4 @@
-import { NO_SESSION_CONNECTED_ERROR, originOf } from '@reticlehq/core';
+import { NO_SESSION_CONNECTED_ERROR, originOf, samePath, type Checkout } from '@reticlehq/core';
 import { notePendingNoSessionReason } from '@/telemetry/tool-refused.js';
 import type { NoSessionReason } from '@reticlehq/core/telemetry';
 import {
@@ -16,6 +16,14 @@ import {
 } from './session-successor.js';
 import { SESSION_DISCONNECTED_REASON, SESSION_PARKED_REASON } from './facts/session-replaced.js';
 import { isErrorDocument } from './session-info.js';
+
+/** The two checkout facts a worktree-scoped resolve needs. */
+export interface CheckoutSource {
+  /** The git checkout of the agent making this call. */
+  caller: () => Checkout | undefined;
+  /** The git checkout whose dev server served this tab connection. */
+  ofTab: (tab: Tab) => Checkout | undefined;
+}
 
 /**
  * The agent's active project, used to scope auto-selection. `projectId` is the stable build-stamped
@@ -150,6 +158,14 @@ export class SessionManager {
   /** Set the active project's default resolve scope (called once at daemon wiring). */
   setDefaultScope(scope: ResolveScope | undefined): void {
     this.#defaultScope = scope;
+  }
+
+  /** Where the calling agent's checkout and each tab's checkout come from. Unset: no worktree scope. */
+  #checkoutScope: CheckoutSource | undefined;
+
+  /** Scope id-less calls to the calling agent's own git worktree (called once at daemon wiring). */
+  setCheckoutScope(scope: CheckoutSource | undefined): void {
+    this.#checkoutScope = scope;
   }
 
   /**
@@ -298,10 +314,18 @@ export class SessionManager {
   }
 
   list(): SessionInfo[] {
+    // Only an agent whose repository has worktrees pays for the serving lookups.
+    const worktreeOf =
+      this.#checkoutScope?.caller() === undefined ? undefined : this.#checkoutScope.ofTab;
     return [...this.#sessions.values()].map((s) => {
       const info = s.info();
       const attachment = this.#attachment.of(s.id);
-      return attachment === undefined ? info : { ...info, attachment };
+      const served = worktreeOf?.(s);
+      return {
+        ...info,
+        ...(attachment === undefined ? {} : { attachment }),
+        ...(true === served?.linked ? { worktree: describeCheckout(served) } : {}),
+      };
     });
   }
 
@@ -616,7 +640,14 @@ export class SessionManager {
     // An explicit per-call scope wins; otherwise the daemon's active-project default applies.
     const effectiveScope = scope ?? this.#defaultScope;
     const connected = [...this.#sessions.values()];
-    const all = scopeSessions(connected, effectiveScope);
+    const inProject = scopeSessions(connected, effectiveScope);
+    // Then to the agent's own worktree: every worktree of a project declares the same projectId.
+    const byCheckout =
+      this.#checkoutScope === undefined
+        ? { sessions: inProject }
+        : scopeToCallerCheckout(inProject, this.#checkoutScope.caller(), this.#checkoutScope.ofTab);
+    if (byCheckout.refusal !== undefined) throw new Error(byCheckout.refusal);
+    const all = byCheckout.sessions;
     if (0 === all.length) {
       // Sessions exist, but none belong to the scoped project — never fall back to a foreign tab.
       // ponytail: still a refusal, deliberately. Auto-targeting the only connected tab would be the
@@ -720,4 +751,63 @@ export class SessionManager {
     best.s.markAgentActivity();
     return best.s;
   }
+}
+
+export interface Tab {
+  id: string;
+  url: string;
+}
+
+export interface CheckoutScope<S> {
+  sessions: S[];
+  /** Set when every tab is known to be served from another worktree of the agent's repository. */
+  refusal?: string;
+}
+
+/**
+ * Which of a project's tabs belong to the agent's own git checkout.
+ *
+ * Every worktree of a project declares the same projectId, so the project scope lets an agent in
+ * worktree A land on the tab worktree B serves. That tab runs B's code, and a verdict on it is about
+ * code agent A never touched. The agent's checkout comes from the directory its MCP proxy runs in;
+ * a tab's checkout comes from the dev server that served it.
+ *
+ * It narrows only on facts. A tab known to come from another worktree of the agent's repository is
+ * dropped. A tab whose checkout cannot be read stays, because it can be the agent's own.
+ */
+export function scopeToCallerCheckout<S extends Tab>(
+  sessions: readonly S[],
+  caller: Checkout | undefined,
+  checkoutOfTab: (tab: S) => Checkout | undefined,
+): CheckoutScope<S> {
+  if (caller === undefined) return { sessions: [...sessions] };
+  const placed = sessions.map((session) => ({ session, checkout: checkoutOfTab(session) }));
+  const mine = placed.filter((p) => isSame(p.checkout?.root, caller.root)).map((p) => p.session);
+  if (mine.length > 0) return { sessions: mine };
+  const siblings = placed.filter((p) => isSame(p.checkout?.commonDir, caller.commonDir));
+  if (siblings.length !== placed.length) {
+    return { sessions: placed.filter((p) => !siblings.includes(p)).map((p) => p.session) };
+  }
+  if (0 === siblings.length) return { sessions: [] };
+  const listed = siblings
+    .map((p) => `${describeCheckout(p.checkout)} (sessionId '${p.session.id}', ${p.session.url})`)
+    .join(', ');
+  return {
+    sessions: [],
+    refusal:
+      `every tab of this app is served from another worktree: ${listed}. This agent runs in ` +
+      `${describeCheckout(caller)}. A verdict on another worktree's tab is about code this agent ` +
+      'did not change. Start the dev server in this worktree, or pass sessionId to drive that tab ' +
+      'on purpose.',
+  };
+}
+
+const isSame = (a: string | undefined, b: string): boolean => a !== undefined && samePath(a, b);
+
+/** `/wt/a (branch feat/a)`, or the folder alone on a detached HEAD. */
+export function describeCheckout(checkout: Checkout | undefined): string {
+  if (checkout === undefined) return 'an unknown folder';
+  return checkout.branch === undefined
+    ? checkout.root
+    : `${checkout.root} (branch ${checkout.branch})`;
 }

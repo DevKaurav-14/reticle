@@ -12,7 +12,8 @@ import {
   splitStatements,
   type PromptContext,
 } from '@reticlehq/core/artifacts';
-import { ReticleDir, apiKeyFrom } from '@reticlehq/core';
+import { ReticleDir, apiKeyFrom, mainCheckoutTwin } from '@reticlehq/core';
+import { readTextOrUndefined } from '@/memory/project/fs/fs-port.js';
 import { redactFeedbackText } from '@/telemetry/feedback.js';
 
 export const MAX_REQUEST = 20_000;
@@ -51,6 +52,13 @@ export function sharesRequests(projectDir: string, reticleRoot: string): boolean
   // Linked by `reticle connect` (cloud.json), or by a key in the environment, the way CI syncs.
   return (
     existsSync(join(reticleRoot, ReticleDir.CLOUD_LINK_FILE)) ||
+    // A git worktree of a linked project is linked: its `.reticle/` is often git-ignored.
+    existsSync(
+      join(
+        mainCheckoutTwin(reticleRoot, readTextOrUndefined) ?? reticleRoot,
+        ReticleDir.CLOUD_LINK_FILE,
+      ),
+    ) ||
     apiKeyFrom(process.env) !== undefined
   );
 }

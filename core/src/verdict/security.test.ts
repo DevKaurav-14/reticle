@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   OutwardAction,
   isDangerousActionText,
+  isDangerousNavigation,
+  isLocalPage,
   isLoopbackHostname,
   isPaymentField,
   isPaymentProviderUrl,
@@ -21,6 +23,33 @@ describe('isLoopbackHostname', () => {
     expect(isLoopbackHostname('127.evil.example')).toBe(false);
     expect(isLoopbackHostname('localhost.example')).toBe(false);
     expect(isLoopbackHostname('127.0.0.999')).toBe(false);
+  });
+
+  /**
+   * The HTTP plane trusts a loopback Host as its guard against DNS rebinding. A browser that sends
+   * `.localhost` names to a DNS server lets a hostile network answer `evil.localhost`, so these
+   * names are not loopback here. `isLocalPage` accepts them for a page.
+   */
+  it('rejects a .localhost subdomain', () => {
+    expect(isLoopbackHostname('app.localhost')).toBe(false);
+    expect(isLoopbackHostname('evil.localhost')).toBe(false);
+  });
+});
+
+describe('isLocalPage', () => {
+  /**
+   * RFC 6761 reserves `.localhost` for loopback, and browsers resolve it locally. Dev proxies such as
+   * portless serve `https://<branch>.<app>.localhost`, one name for each git worktree. These pages
+   * were read as remote, so the SDK refused to start and the bridge refused the origin.
+   */
+  it('accepts a page on a .localhost subdomain, and nothing that only contains the word', () => {
+    expect(isLocalPage('https:', 'app.localhost')).toBe(true);
+    expect(isLocalPage('https:', 'feat-x.app.localhost')).toBe(true);
+    expect(isLocalPage('https:', 'APP.LOCALHOST')).toBe(true);
+    expect(isLocalPage('https:', 'app.localhost.')).toBe(false);
+    expect(isLocalPage('https:', 'evil-localhost')).toBe(false);
+    expect(isLocalPage('https:', 'localhost.evil.example')).toBe(false);
+    expect(isLocalPage('https:', '.localhost')).toBe(false);
   });
 });
 
@@ -231,5 +260,23 @@ describe('what the Harness may press', () => {
     ).toEqual([]);
     expect(outwardActionsAsked('Open the members page without sending the invitation')).toEqual([]);
     expect(outwardActionsAsked('Open Runs and read the failed check')).toEqual([]);
+  });
+});
+
+/** A link to `/billing/payment` with the text "Orders & invoices" was refused as a payment (#1275). */
+describe('isDangerousNavigation', () => {
+  it('does not refuse a same-app page because its path has a money word', () => {
+    for (const href of ['/billing/payments', '/billing/payment', '/shop/buy', '/orders/refund'])
+      expect(isDangerousNavigation(href)).toBe(false);
+  });
+
+  it('refuses a path that destroys something', () => {
+    expect(isDangerousNavigation('/account/delete')).toBe(true);
+    expect(isDangerousNavigation('/settings/close-account')).toBe(true);
+    expect(isDangerousNavigation('/tokens/revoke_all')).toBe(true);
+  });
+
+  it('refuses a payment provider URL', () => {
+    expect(isDangerousNavigation('https://checkout.stripe.com/c/pay/xyz')).toBe(true);
   });
 });

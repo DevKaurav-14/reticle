@@ -15,6 +15,8 @@ import {
 export { REDACTED_FILL, secretEnvKey } from './fields/flow-secret-field.js';
 import { safeProjectId, type FlowResult } from './flow-result.js';
 import { changeInPlace } from './narrow-write.js';
+import { dirname } from 'node:path';
+import { gitTracks } from '@/machine/git-tracks.js';
 export type { FlowResult } from './flow-result.js';
 import {
   AnchorKind,
@@ -37,7 +39,7 @@ import type {
   HealChange,
   InstrumentationGap,
 } from '@reticlehq/core';
-import { ReticleTool, flowJsonReplacer } from '@reticlehq/core';
+import { ReticleTool, flowJsonReplacer, mainCheckoutTwin } from '@reticlehq/core';
 import { asRecord, asString } from '@reticlehq/core';
 import { applyHealChanges } from './heal.js';
 import { withLearnedSources } from './learned-sources.js';
@@ -51,7 +53,7 @@ import {
 } from './flow-journey.js';
 import { IntentStore } from '@/memory/intent/intent-store.js';
 import type { CompiledProgram, RecordedStep } from './recording/tape/recordings.js';
-import type { FileSystemPort } from '@/memory/project/fs/fs-port.js';
+import { readTextOrUndefined, type FileSystemPort } from '@/memory/project/fs/fs-port.js';
 import {
   flowDir,
   flowParentDir,
@@ -385,11 +387,25 @@ export class FlowStore {
    * new run (`RunStore` takes the same callback). Without it a flow saved with no run behind it
    * waited for the timer, and a daemon that exited first never sent it.
    */
+  /**
+   * The main checkout's flows, read-only, when this store sits in a linked git worktree and git
+   * ignores `.reticle/`. A flow saved there is then still replayed here. Writes never go to it.
+   * When git tracks `.reticle/`, the worktree already has every committed flow, and reading the
+   * main checkout brought back a flow that the branch deleted.
+   */
+  readonly #main: FlowStore | undefined;
+
   constructor(fs: FileSystemPort, root: string, clock: Clock, opts: { onWrote?: () => void } = {}) {
     this.#fs = fs;
     this.#root = root;
     this.#clock = clock;
     this.#onWrote = opts.onWrote;
+    const twin = mainCheckoutTwin(root, readTextOrUndefined);
+    // The main checkout has no twin of its own, so this never nests deeper than one level.
+    this.#main =
+      twin === undefined || gitTracks(reticleDirPaths(root).flows)
+        ? undefined
+        : new FlowStore(fs, twin, clock);
   }
 
   /**
@@ -621,8 +637,13 @@ export class FlowStore {
         load: (n, p) => this.load(n, p),
         // Branded at the boundary: the port speaks strings, the store speaks FlowName, and the
         // name has already passed isValidFlowName inside changeInPlace.
-        resolvePath: (n, p) => this.#resolveReadPath(asFlowName(n), p),
-        write: (path, contents) => this.#fs.writeFile(path, contents),
+        // A flow read from the main checkout is changed in a copy in this worktree.
+        resolvePath: async (n, p) =>
+          (await this.#resolveReadPath(asFlowName(n), p)) ?? flowPath(this.#root, asFlowName(n), p),
+        write: async (path, contents) => {
+          await this.#fs.mkdir(dirname(path));
+          await this.#fs.writeFile(path, contents);
+        },
         serialize: (flow) => this.#serialize(flow),
         readRaw: (path) => this.#fs.readFile(path),
       },
@@ -702,6 +723,12 @@ export class FlowStore {
    * name must validate first; `flowPath` takes a branded FlowName precisely so the compiler insists.
    */
   async list(projectId?: ProjectId): Promise<string[]> {
+    const own = await this.#listOwn(projectId);
+    if (this.#main === undefined) return own;
+    return [...new Set([...own, ...(await this.#main.list(projectId))])].sort();
+  }
+
+  async #listOwn(projectId?: ProjectId): Promise<string[]> {
     const flowsDir = reticleDirPaths(this.#root).flows;
     const pid = safeProjectId(projectId);
     const legacy = await this.#namesIn(flowsDir);
@@ -764,6 +791,12 @@ export class FlowStore {
    * back to a legacy flat (untagged) flow of the same name — so pre-existing flows keep loading.
    */
   async load(name: string, projectId?: ProjectId): Promise<FlowResult<FlowFile>> {
+    const own = await this.#loadOwn(name, projectId);
+    if (own.ok || own.code !== FlowErrorCode.NOT_FOUND || this.#main === undefined) return own;
+    return this.#main.load(name, projectId);
+  }
+
+  async #loadOwn(name: string, projectId?: ProjectId): Promise<FlowResult<FlowFile>> {
     if (!isValidFlowName(name)) return { ok: false, code: FlowErrorCode.INVALID_NAME };
     const path = await this.#resolveReadPath(name, safeProjectId(projectId));
     if (null === path) return { ok: false, code: FlowErrorCode.NOT_FOUND };

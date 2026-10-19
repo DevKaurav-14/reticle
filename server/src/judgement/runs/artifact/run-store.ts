@@ -10,6 +10,8 @@ import { callingAttachId } from '@/hooks/coding-agents.js';
 import { episodeStampFor } from '@/hooks/episode-stamp.js';
 import {
   asRunId,
+  checkoutOf,
+  ReticleDir,
   ReticleVerificationRunSchema,
   RUN_RETENTION,
   RUN_RETENTION_SLACK,
@@ -23,14 +25,14 @@ import {
   type StepScreenshot,
 } from '@reticlehq/core';
 import { PromptContextSchema, type PromptContext } from '@reticlehq/core/artifacts';
-import type { FileSystemPort } from '@/memory/project/fs/fs-port.js';
+import { readTextOrUndefined, type FileSystemPort } from '@/memory/project/fs/fs-port.js';
 import {
   reticleDirPaths,
   isValidRunId,
   runPath,
   stepShotDir,
 } from '@/memory/project/dir/reticle-dir.js';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const JSON_INDENT = 2;
 const JSON_EXT = '.json';
@@ -88,6 +90,17 @@ export class RunStore {
    * Guards runId as a safe path segment BEFORE building the path — a runId can originate from a caller
    * (an OEM may set it), so an unsafe value must never escape .reticle/runs/ (mirrors the read guard).
    */
+  /**
+   * The branch of the checkout that holds these runs. None for a folder inside Reticle's own
+   * storage (`~/.reticle/unmatched/<id>`): the walk up from there finds the home folder, which can be
+   * a dotfiles repository, and its branch says nothing about the app.
+   */
+  #branch(): string | undefined {
+    const project = dirname(this.#root);
+    if (project.split(/[\\/]/).includes(ReticleDir.ROOT)) return undefined;
+    return checkoutOf(project, readTextOrUndefined)?.branch;
+  }
+
   async write(
     given: ReticleVerificationRun,
     /** The tab the run came from, so a run written outside any call still finds its episode. */
@@ -118,6 +131,10 @@ export class RunStore {
     // The step screenshots taken for this run, the last of which may still be landing.
     await shotsLanded(this.#root, run.runId);
     run = withScreenshots(run, await readStepShots(this.#fs, this.#root, run.runId));
+    // Several agents drive one project at once, each in its own git worktree. Every run kind is
+    // written here, so here the run learns which branch it belongs to.
+    const branch = run.project.branch ?? this.#branch();
+    if (branch !== undefined) run = { ...run, project: { ...run.project, branch } };
     // Atomic publish: write a temp file then rename, so a crash mid-write never leaves a half-written
     // artifact (a partial.json would otherwise read back as MALFORMED).
     const path = runPath(this.#root, run.runId);
@@ -240,6 +257,16 @@ export class RunStore {
     return entries
       .filter((e) => e.endsWith(JSON_EXT))
       .map((e) => asRunId(e.slice(0, -JSON_EXT.length)));
+  }
+
+  /** Every readable run. Retention bounds how many there are. */
+  async all(): Promise<ReticleVerificationRun[]> {
+    const runs: ReticleVerificationRun[] = [];
+    for (const id of await this.list()) {
+      const result = await this.read(id);
+      if (result.ok) runs.push(result.run);
+    }
+    return runs;
   }
 
   /** The most-recent run by createdAt (undefined when none). Powers reticle_run_export's default. */

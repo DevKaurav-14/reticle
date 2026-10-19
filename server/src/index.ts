@@ -13,7 +13,7 @@ import { attachCloudSync, flushWithin } from './memory/cloud/sync-daemon.js';
 import { wireHooks } from './hooks/hook-commands.js';
 import { currentDrivenBy } from './hooks/driven-by.js';
 import { artifactRootResolver } from './memory/project/artifact-root-resolver.js';
-import { servingDirectoryOf } from './portal/session/serving-directory.js';
+import { liveCheckoutSource, servingDirectoryOf } from './portal/session/serving-directory.js';
 import type { Server } from 'node:http';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -214,16 +214,13 @@ export async function start(options: StartOptions = {}): Promise<RunningServer> 
    * here, and their work waited on disk for a later daemon. It does nothing for an unlinked root,
    * and `close` sends one last bounded cycle.
    */
-  // The same client version the daemon's sync sends, so the server can tell the two apart.
-  const syncClient = { clientVersion: SERVER_VERSION };
   const cloudSync = attachCloudSync({
     fs: createNodeFileSystem(),
     reticleRoot: options.reticleRoot ?? join(process.cwd(), ReticleDir.ROOT),
     homeDir: homedir(),
     env: process.env,
     otherRoots: knownProjectRoots,
-    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
-    ...syncClient,
+    clientVersion: SERVER_VERSION,
   });
   const security = await resolveBridgeSecurityWithAutoToken(options);
   const bridge = new Bridge({ port, sdkFix: sdkFixForProject, ...security });
@@ -237,6 +234,8 @@ export async function start(options: StartOptions = {}): Promise<RunningServer> 
   if (activeProjectId !== undefined) {
     bridge.sessions.setDefaultScope({ projectId: activeProjectId });
   }
+  // Then to the agent's own git worktree: every worktree declares the same projectId.
+  bridge.sessions.setCheckoutScope(liveCheckoutSource());
   const baselines = new BaselineStore();
   const recordings = new RecordingStore(() => currentDrivenBy() !== undefined);
   // drive precedence: driveUrl (launch+own a browser) → CDP (attach) → none.
@@ -405,6 +404,8 @@ export async function startDaemon(options: StartOptions = {}): Promise<RunningSe
     sdkFix: sdkFixForProject,
     ...security,
   });
+  // The daemon serves every agent on the machine: scope id-less calls to the calling agent's worktree.
+  bridge.sessions.setCheckoutScope(liveCheckoutSource());
   const repaint = (only?: string, ifChanged = false): void => {
     for (const session of bridge.sessions.all()) {
       const root =
@@ -427,15 +428,19 @@ export async function startDaemon(options: StartOptions = {}): Promise<RunningSe
   shared.attachStatus((held) => {
     // `init` holds the daemon it is waiting on, so the idle rule cannot shut it down mid-wait.
     if (held) noteSetupHold(Date.now());
+    const tabs = bridge.sessions.all();
     return statusPayload(
       bridge.sessions.count(),
       bridge.sessions.list(),
       bridge.sessions.noSessionHint(),
       verifyHttp?.port,
       bridge.sessions.noSessionLead(),
-      bridge.sessions.all(),
+      tabs,
+      tabs.map((session) => session.sdkVersion ?? null),
     );
   });
+  // Called when an agent connects. The pages already up are the ones a restart would skew (#1709).
+  shared.attachPageSdkVersions(() => bridge.sessions.all().map((session) => session.sdkVersion));
   // Agent-independent presence: the daemon outlives any single agent, so when the LAST agent's MCP
   // connection drops (it stopped, or is waiting on the human), end every session and push a clear
   // "go to your terminal" notice to the panel — the human is on the browser and must not lose a typed
@@ -515,8 +520,8 @@ export async function startDaemon(options: StartOptions = {}): Promise<RunningSe
     homeDir: homedir(),
     env: process.env,
     otherRoots: knownProjectRoots,
-    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
     clientVersion: SERVER_VERSION,
+    signedIn: (url) => signedInTo(join(homedir(), ReticleDir.ROOT), url),
   });
   syncNudge.run = (): void => cloudSync.nudge();
   // `syncNow`, not `nudge` (a cycle soon): somebody is watching the button. Never awaited.

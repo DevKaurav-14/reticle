@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { join, sep } from 'node:path';
-import type { DevServerEntry } from '@reticlehq/core';
-import { servingDirectoryOf } from './serving-directory.js';
+import type { Checkout, DevServerEntry } from '@reticlehq/core';
+import { liveCheckoutSource, servingDirectoryOf } from './serving-directory.js';
 
 const MAIN = join(sep, 'repo', 'main');
 const CLONE = join(sep, 'repo', 'clone');
@@ -32,6 +32,59 @@ describe('servingDirectoryOf', () => {
 
     expect(dir).toBe(CLONE);
     expect(shelledOut).toBe(false);
+  });
+
+  /**
+   * A dev proxy (portless) serves every worktree on port 443 under its own name, and the dev server
+   * behind it listens on another port. The port cannot tell the worktrees apart; the announced URL can.
+   */
+  it('matches a dev server by the URL it announced, before the port', () => {
+    const behindProxy = (port: number, root: string, url: string): DevServerEntry => ({
+      ...entry(port, root),
+      url,
+    });
+    const dir = servingDirectoryOf('https://feat-x.app.localhost', {
+      devServers: () => [
+        behindProxy(4101, MAIN, 'https://app.localhost'),
+        behindProxy(4102, CLONE, 'https://feat-x.app.localhost'),
+      ],
+      listenerCwd: () => MAIN,
+    });
+
+    expect(dir).toBe(CLONE);
+  });
+
+  /**
+   * A dev server with no announcing plugin (Next.js) behind portless. The page's port is the proxy's,
+   * and `lsof` on it gave the proxy's own folder, so every such tab was placed in one checkout.
+   * portless's route table names the port of the dev server behind each name.
+   */
+  it('follows a dev proxy route to the dev server behind it', () => {
+    const ports: number[] = [];
+    const dir = servingDirectoryOf('http://feat-x.app.localhost:1355', {
+      devServers: () => [],
+      listenerCwd: (port) => {
+        ports.push(port);
+        return 4102 === port ? CLONE : MAIN;
+      },
+      devProxy: () => ({
+        ports: [1355],
+        routes: [{ hostname: 'feat-x.app.localhost', port: 4102 }],
+      }),
+    });
+
+    expect(dir).toBe(CLONE);
+    expect(ports).toEqual([4102]);
+  });
+
+  it('places no page on the proxy port that no route names', () => {
+    const dir = servingDirectoryOf('http://gone.app.localhost:1355', {
+      devServers: () => [],
+      listenerCwd: () => MAIN,
+      devProxy: () => ({ ports: [1355], routes: [] }),
+    });
+
+    expect(dir).toBeUndefined();
   });
 
   it('falls back to the working directory of whatever listens on the port', () => {
@@ -78,5 +131,30 @@ describe('servingDirectoryOf', () => {
     expect(servingDirectoryOf('https://staging.example.com', io)).toBeUndefined();
     expect(servingDirectoryOf('not a url', io)).toBeUndefined();
     expect(consulted).toBe(false);
+  });
+});
+
+describe('liveCheckoutSource', () => {
+  const at = (root: string): Checkout => ({ root, mainRoot: MAIN, commonDir: MAIN, linked: true });
+
+  /**
+   * Worktree A's dev server stops and worktree B's starts on the same port. The page reloads, which is
+   * a new connection, and it now runs B's code. A cache by origin named it A's for 30 seconds, so the
+   * agent in A drove B's code and the agent in B was refused.
+   */
+  it('places each tab connection once, and a reloaded tab again', () => {
+    let served = at(MAIN);
+    let lookups = 0;
+    const source = liveCheckoutSource(() => {
+      lookups += 1;
+      return served;
+    });
+    const first = { id: 's', url: 'http://localhost:5173/' };
+
+    expect(source.ofTab(first)?.root).toBe(MAIN);
+    served = at(CLONE);
+    expect(source.ofTab(first)?.root).toBe(MAIN);
+    expect(source.ofTab({ id: 's', url: 'http://localhost:5173/' })?.root).toBe(CLONE);
+    expect(lookups).toBe(2);
   });
 });

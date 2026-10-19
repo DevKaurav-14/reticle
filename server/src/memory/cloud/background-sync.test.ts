@@ -14,7 +14,6 @@ import { attachCloudSync, startSyncDaemon } from './sync-daemon.js';
 import {
   BackgroundSyncState,
   backgroundSyncGate,
-  localFingerprint,
   type BackgroundSyncGate,
 } from './background-sync.js';
 import type { ProjectCloud } from './cloud-config.js';
@@ -89,18 +88,13 @@ function platform() {
   };
 }
 
-function daemon(
-  server: ReturnType<typeof platform>,
-  gate: () => BackgroundSyncGate,
-  intervalMs = INTERVAL,
-) {
+function daemon(server: ReturnType<typeof platform>, gate: () => BackgroundSyncGate) {
   return startSyncDaemon({
     reticleRoot: root,
     cloud: () => Promise.resolve(LINKED),
     request: server.request,
-    intervalMs,
+    intervalMs: INTERVAL,
     gate,
-    fingerprint: localFingerprint,
   });
 }
 
@@ -124,16 +118,15 @@ describe('background sync', () => {
     d.stop();
   });
 
-  it('makes no call while nothing changed', async () => {
+  it('sends nothing again while nothing changed', async () => {
     const server = platform();
     writeRun('r1', 'a request');
     const d = daemon(server, () => ON);
     await vi.advanceTimersByTimeAsync(INTERVAL);
     expect(server.pushes()).toHaveLength(1);
-    const after = server.calls.length;
-    // Four more looks, well inside the pull period: nothing local moved, so nothing is asked.
+    // Four more backstop cycles: nothing local moved, so nothing more is pushed.
     await vi.advanceTimersByTimeAsync(4 * INTERVAL);
-    expect(server.calls).toHaveLength(after);
+    expect(server.pushes()).toHaveLength(1);
     d.stop();
   });
 
@@ -176,16 +169,12 @@ describe('background sync', () => {
     d.stop();
   });
 
-  it('backs off on a network error, and the next success clears it', async () => {
+  it('counts network failures, and the next success clears them', async () => {
     const server = platform();
     server.set('down');
     writeRun('r1', 'a request');
-    // The production backstop: a failed cycle retries after a minute, doubling up to it.
-    const d = daemon(server, () => ON, 600_000);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    // A failed cycle makes two calls, so a retry every minute would be 120 in the hour. Doubling
-    // waits capped at the backstop leave about nine cycles.
-    expect(server.calls.length).toBeLessThanOrEqual(20);
+    const d = daemon(server, () => ON);
+    await vi.advanceTimersByTimeAsync(3 * INTERVAL);
     expect(d.background().failures).toBeGreaterThan(1);
     expect(d.background().lastError).toBeDefined();
     server.set('ok');
@@ -233,8 +222,8 @@ describe('where background sync sends', () => {
         homeDir: home,
         env,
         otherRoots: () => [],
+        clientVersion: '3.8.0',
         signedIn: () => 'token',
-        clientVersion: 'test',
         request: server.request,
         intervalMs: INTERVAL,
       });

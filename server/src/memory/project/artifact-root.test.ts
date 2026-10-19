@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { asProjectId, ReticleDir } from '@reticlehq/core';
 import { emptyProjectRegistry, rememberProject } from '@reticlehq/core/artifacts';
 import {
   ArtifactRootReason,
   UNMATCHED_SUBDIR,
   projectCandidatesFrom,
+  rebaseIntoCheckout,
   resolveArtifactRoot,
   unmatchedRoot,
 } from './artifact-root.js';
@@ -570,5 +571,38 @@ describe('an unnameable project does not share a bucket with every other one', (
       origin: 'http://localhost:3000',
     });
     expect(basename(root)).toBe('abc123');
+  });
+});
+
+describe('rebaseIntoCheckout', () => {
+  const git = join(sep, 'repo', '.git');
+  const main = { root: join(sep, 'repo'), commonDir: git };
+  const wt = { root: join(sep, 'wt', 'x'), commonDir: git };
+  const app = join(sep, 'repo', 'apps', 'web');
+
+  it('moves a project folder from the main checkout into the worktree that served the page', () => {
+    expect(rebaseIntoCheckout(app, main, wt)).toBe(join(sep, 'wt', 'x', 'apps', 'web'));
+  });
+
+  it('keeps the folder when the page came from the same checkout', () => {
+    expect(rebaseIntoCheckout(app, main, main)).toBe(app);
+  });
+
+  it('keeps the folder when the two checkouts are different repositories', () => {
+    const other = { root: join(sep, 'b'), commonDir: join(sep, 'b', '.git') };
+    expect(rebaseIntoCheckout(app, main, other)).toBe(app);
+  });
+
+  /** A bare clone has no main checkout: the project was found in one worktree, the page came from another. */
+  it('moves a project folder between two worktrees of a bare repository', () => {
+    const bare = join(sep, 'app.git');
+    const a = { root: join(sep, 'wt', 'a'), commonDir: bare };
+    const b = { root: join(sep, 'wt', 'b'), commonDir: bare };
+    expect(rebaseIntoCheckout(join(sep, 'wt', 'a', 'web'), a, b)).toBe(join(sep, 'wt', 'b', 'web'));
+  });
+
+  it('keeps the folder when either checkout is unknown', () => {
+    expect(rebaseIntoCheckout(app, undefined, wt)).toBe(app);
+    expect(rebaseIntoCheckout(app, main, undefined)).toBe(app);
   });
 });
