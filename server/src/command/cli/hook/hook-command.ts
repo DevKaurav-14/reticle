@@ -17,6 +17,7 @@ import {
   claudeAvailableProbe,
   installPromptHook,
   promptHookInstalled,
+  promptHookNpxOnly,
   promptHookTargets,
   uninstallPromptHook,
 } from '@reticlehq/init';
@@ -107,11 +108,17 @@ export function promptCaptureRows(
     return ['off in this project ("promptCapture": false in .reticle.json)'];
   }
   const targets = promptHookTargets(fileIo, projectDir, home, claudeCli, join);
-  const rows = targets.map((t) =>
-    promptHookInstalled(t.spec, t.existing)
-      ? `✓ ${t.spec.label}: hook installed (${t.path})${t.spec.activation === undefined ? '' : `. ${t.spec.activation}`}`
-      : `✗ ${t.spec.label}: no hook; run \`reticle hook install\``,
-  );
+  // Where the bin can run directly (not Windows), an npx-only install is slower than it needs to be.
+  const direct = hookBinFor(home, process.platform) !== undefined;
+  const rows = targets.map((t) => {
+    if (!promptHookInstalled(t.spec, t.existing))
+      return `✗ ${t.spec.label}: no hook; run \`reticle hook install\``;
+    const slow =
+      direct && promptHookNpxOnly(t.spec, t.existing)
+        ? `, through npx (~400 ms slower per call); run \`reticle hook install\` to run it directly`
+        : '';
+    return `✓ ${t.spec.label}: hook installed (${t.path})${slow}${t.spec.activation === undefined ? '' : `. ${t.spec.activation}`}`;
+  });
   rows.push(`MCP instructions only: ${MCP_FALLBACK_AGENTS.join(', ')}`);
   return rows;
 }

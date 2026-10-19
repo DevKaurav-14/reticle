@@ -464,6 +464,25 @@ export function promptHookInstalled(spec: PromptHookSpec, text: string | null): 
   );
 }
 
+/**
+ * THIS version is installed, but some slot runs it through npx alone (~426 ms of npx start per
+ * call): an install from before the direct form. Any machine's bin counts as direct, so a
+ * teammate's path is never rewritten with this one's.
+ */
+export function promptHookNpxOnly(spec: PromptHookSpec, text: string | null): boolean {
+  const config = parseConfig(text);
+  return (
+    config !== undefined &&
+    promptHookInstalled(spec, text) &&
+    spec.slots.some(
+      (slot) =>
+        !listAt(config, slot.path).some((item) =>
+          JSON.stringify(item).includes(`${OR_ELSE}${slotCommand(spec, slot)}`),
+        ),
+    )
+  );
+}
+
 /** Our entry merged into the config. `content` is the text to write; MANUAL keeps the text as it is. */
 export function installPromptHook(
   spec: PromptHookSpec,
@@ -473,7 +492,9 @@ export function installPromptHook(
 ): { status: PromptHookStatus; content: string } {
   const config = parseConfig(text);
   if (config === undefined) return { status: PromptHookStatus.MANUAL, content: text ?? '' };
-  if (promptHookInstalled(spec, text)) {
+  // An npx-only install is rewritten when this machine can run the bin directly.
+  const direct = bin !== undefined && SAFE_BIN.test(bin);
+  if (promptHookInstalled(spec, text) && !(direct && promptHookNpxOnly(spec, text))) {
     return { status: PromptHookStatus.ALREADY, content: text ?? '' };
   }
   let next: Json = { ...(spec.header ?? {}), ...config };

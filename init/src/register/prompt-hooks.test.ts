@@ -6,6 +6,7 @@ import {
   installPromptHook,
   promptHookCommand,
   promptHookInstalled,
+  promptHookNpxOnly,
   promptHookPath,
   directHookCommand,
   toolHookCommand,
@@ -278,6 +279,27 @@ describe('the prompt-capture hook in each agent config', () => {
     );
     // Uninstall still finds it.
     expect(uninstallPromptHook(spec(PromptHookAgent.CURSOR), content).content).toBeNull();
+  });
+
+  /*
+   * An install written before the direct form counted as installed, so it ran through npx (~426 ms
+   * per call) until the version changed. Where a bin is known, it is now rewritten in place.
+   */
+  it('rewrites an npx-only install of this version to the direct form, for every agent', () => {
+    const bin = '$HOME/.npm/_npx/abc/node_modules/@reticlehq/server/bin/reticle.js';
+    for (const agent of PROMPT_HOOK_AGENTS) {
+      const npxOnly = installPromptHook(agent, null).content;
+      expect(promptHookInstalled(agent, npxOnly)).toBe(true);
+      expect(promptHookNpxOnly(agent, npxOnly)).toBe(true);
+      const out = installPromptHook(agent, npxOnly, bin);
+      expect(out.status).toBe(PromptHookStatus.APPLY);
+      expect(promptHookNpxOnly(agent, out.content)).toBe(false);
+      expect(out.content).toContain(`node \\"${bin}\\"`);
+      // Rewritten in place, not appended: the same entries a fresh direct install writes.
+      expect(out.content).toBe(installPromptHook(agent, null, bin).content);
+      // With no bin (Windows), npx alone is the only form, so it stays.
+      expect(installPromptHook(agent, npxOnly).status).toBe(PromptHookStatus.ALREADY);
+    }
   });
 
   it('keeps npx alone for a bin path a shell could misread', () => {
