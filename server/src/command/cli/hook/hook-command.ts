@@ -25,7 +25,7 @@ import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
 import { captureToolCall, toolHookAck } from './tool-hook.js';
-import { AT_FLAG, PROMPT_WRITE_ACTION, TOOL_WRITE_ACTION } from './hook-fast.js';
+import { AT_FLAG, PROMPT_WRITE_ACTION, TOOL_WRITE_ACTION, hookBinFor } from './hook-fast.js';
 import { exportStructure } from './episode-structure.js';
 
 const HookAction = {
@@ -125,7 +125,11 @@ function install(cwd: string, print: (line: string) => void): number {
   }
   let failed = 0;
   for (const target of targets) {
-    const merged = installPromptHook(target.spec, target.existing);
+    const merged = installPromptHook(
+      target.spec,
+      target.existing,
+      hookBinFor(homedir(), process.platform),
+    );
     if (PromptHookStatus.ALREADY === merged.status) {
       print(`✓ ${target.spec.label}: already installed (${target.path})`);
     } else if (PromptHookStatus.MANUAL === merged.status) {

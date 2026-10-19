@@ -115,7 +115,7 @@ const commandOnly = (command: string): Record<string, unknown> => ({ command });
 const copilotPostTool = (command: string): Record<string, unknown> => ({
   type: 'command',
   bash: command,
-  powershell: command,
+  powershell: npxPart(command),
   timeoutSec: HOOK_TIMEOUT_S,
   matcher: 'bash|edit',
 });
@@ -149,6 +149,36 @@ interface HookSlot {
   /** The command this slot runs, when it is not the prompt command. */
   readonly command?: (agent: PromptHookAgent) => string;
 }
+
+/**
+ * A bin path a shell reads as one word: absolute (or under `$HOME`), with no quote, backtick,
+ * backslash or other `$`. Anything else keeps npx alone: a hook that runs the wrong thing is worse
+ * than a slow one.
+ */
+const SAFE_BIN = /^(?:\$HOME)?\/[^"`\\$]*$/;
+
+/**
+ * Run the installed CLI with node, and fall back to the pinned npx command when that file is gone.
+ * npx's own start (~350 ms on a laptop) came before every prompt and tool call. The path is this
+ * machine's; the npx half is what every other machine runs, so the entry stays correct for a
+ * teammate. `node` exits at once on a missing file, before it reads stdin, so the fallback still
+ * gets the payload.
+ */
+export function directHookCommand(bin: string, npx: string): string {
+  if (!SAFE_BIN.test(bin)) return npx;
+  const args = npx.slice(npx.indexOf(' hook ') + 1);
+  return `node "${bin}" ${args}${OR_ELSE}${npx}`;
+}
+
+/**
+ * The npx half of a command. Windows PowerShell 5 has no `||`, and a committed file reaches
+ * teammates on every shell, so a `powershell` field always runs npx alone.
+ */
+function npxPart(command: string): string {
+  const at = command.indexOf(OR_ELSE);
+  return -1 === at ? command : command.slice(at + OR_ELSE.length);
+}
+const OR_ELSE = ' || ';
 
 const slotCommand = (spec: PromptHookSpec, slot: HookSlot): string =>
   (slot.command ?? promptHookCommand)(spec.id);
@@ -285,7 +315,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
         entry: (command) => ({
           type: 'command',
           bash: command,
-          powershell: command,
+          powershell: npxPart(command),
           timeoutSec: HOOK_TIMEOUT_S,
         }),
       },
@@ -337,6 +367,8 @@ export interface PromptHookTarget {
   readonly spec: PromptHookSpec;
   readonly path: string;
   readonly existing: string | null;
+  /** The installed CLI's bin, when known. See `directHookCommand`. */
+  readonly bin?: string;
 }
 
 /**
@@ -436,6 +468,8 @@ export function promptHookInstalled(spec: PromptHookSpec, text: string | null): 
 export function installPromptHook(
   spec: PromptHookSpec,
   text: string | null,
+  /** The installed CLI's bin, when known: the hook runs it directly. See `directHookCommand`. */
+  bin?: string,
 ): { status: PromptHookStatus; content: string } {
   const config = parseConfig(text);
   if (config === undefined) return { status: PromptHookStatus.MANUAL, content: text ?? '' };
@@ -445,7 +479,9 @@ export function installPromptHook(
   let next: Json = { ...(spec.header ?? {}), ...config };
   for (const slot of spec.slots) {
     const list = listAt(next, slot.path).filter((item) => !ours(item));
-    next = withList(next, slot.path, [...list, slot.entry(slotCommand(spec, slot))]);
+    const npx = slotCommand(spec, slot);
+    const command = bin === undefined ? npx : directHookCommand(bin, npx);
+    next = withList(next, slot.path, [...list, slot.entry(command)]);
   }
   return { status: PromptHookStatus.APPLY, content: serialize(next) };
 }

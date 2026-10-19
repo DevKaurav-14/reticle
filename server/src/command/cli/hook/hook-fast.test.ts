@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROMPT_WRITE_ACTION,
+  hookBinFor,
   TOOL_WRITE_ACTION,
   promptHookAck,
   runPromptHookFast,
@@ -84,5 +85,17 @@ describe('the prompt hook fast path', () => {
     expect(promptHookAck('cursor')).toBe('{"continue":true}\n');
     expect(promptHookAck('gemini')).toBe('{}\n');
     expect(promptHookAck('claude-code')).toBe('');
+  });
+});
+
+describe('the bin an agent hook names', () => {
+  it('is home-relative under the home folder, absolute elsewhere, and absent on Windows', () => {
+    expect(hookBinFor('/Users/me', 'darwin', '/Users/me/.npm/x/bin/reticle.js')).toBe(
+      '$HOME/.npm/x/bin/reticle.js',
+    );
+    expect(hookBinFor('/Users/me', 'linux', '/opt/reticle/bin/reticle.js')).toBe(
+      '/opt/reticle/bin/reticle.js',
+    );
+    expect(hookBinFor('C:\\Users\\me', 'win32', 'C:\\x\\reticle.js')).toBeUndefined();
   });
 });

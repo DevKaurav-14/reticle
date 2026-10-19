@@ -19,6 +19,7 @@ export const PROMPT_WRITE_ACTION = 'prompt-write';
 export const AT_FLAG = '--at';
 const HOOK_COMMAND = 'hook';
 const PROMPT_ACTION = 'prompt';
+const WINDOWS = 'win32';
 const CURSOR = 'cursor';
 const GEMINI = 'gemini';
 const CODEX = 'codex';
@@ -30,6 +31,17 @@ const MAX_STDIN_BYTES = 1024 * 1024;
 const STDIN_WAIT_MS = 3_000;
 /** `bin/reticle.js`, from `dist/command/cli/hook/hook-fast.js`. */
 const BIN = fileURLToPath(new URL('../../../../bin/reticle.js', import.meta.url));
+
+/**
+ * This CLI's bin as an agent hook should name it: `$HOME/...` when under the home folder, so no
+ * user name lands in a committed file; undefined on Windows, whose shells do not all read `||`
+ * and `$HOME`, so the hooks there stay on npx alone. See `directHookCommand` in `@reticlehq/init`.
+ */
+export function hookBinFor(home: string, platform: string, bin: string = BIN): string | undefined {
+  if (WINDOWS === platform) return undefined;
+  const under = 0 < home.length && bin.startsWith(`${home}/`);
+  return under ? `$HOME${bin.slice(home.length)}` : bin;
+}
 
 /** What the hook prints. Cursor and Gemini CLI read stdout as JSON; the rest need nothing. */
 export function toolHookAck(agent: string, payload = ''): string {

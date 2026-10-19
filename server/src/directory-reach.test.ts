@@ -632,7 +632,9 @@ const REACHES_FOR: Record<string, readonly string[]> = {
    * is why setup no longer reaches bridge, proxy or telemetry at all — those three reaches were
    * these two files and nothing else.
    */
-  init: ['binding', 'bridge', 'bringup', 'proxy', 'setup', 'telemetry', 'terminal'],
+  // `hook` for `hookBinFor`: the bin init writes into each agent hook, the same one the hook's fast
+  // path runs from. `hook` imports nothing from `init`, so this adds no mutual pair.
+  init: ['binding', 'bridge', 'bringup', 'hook', 'proxy', 'setup', 'telemetry', 'terminal'],
   /**
    * A file changed: which flows must re-verify, what the gate does about it, and how a
    * save-heavy editor's burst becomes one flush. Four files that import nothing whatsoever,

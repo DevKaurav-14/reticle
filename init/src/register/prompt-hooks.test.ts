@@ -7,6 +7,7 @@ import {
   promptHookCommand,
   promptHookInstalled,
   promptHookPath,
+  directHookCommand,
   toolHookCommand,
   uninstallPromptHook,
 } from './prompt-hooks.js';
@@ -249,5 +250,41 @@ describe('the prompt-capture hook in each agent config', () => {
     expect(dig(content(PromptHookAgent.WINDSURF), 'hooks', 'post_cascade_response', 0)).toEqual({
       command: toolHookCommand(PromptHookAgent.WINDSURF),
     });
+  });
+
+  /*
+   * npx's own start (~350 ms) came before every hook run. Where the installed CLI's bin is known,
+   * the hook runs it with node directly, and falls back to npx when that file is gone.
+   */
+  it('runs the installed bin directly, with npx as the fallback', () => {
+    const bin = '$HOME/.npm/_npx/abc/node_modules/@reticlehq/server/bin/reticle.js';
+    const command = directHookCommand(bin, promptHookCommand(PromptHookAgent.CURSOR));
+    expect(command).toBe(
+      `node "${bin}" hook prompt --agent cursor || ${promptHookCommand(PromptHookAgent.CURSOR)}`,
+    );
+    const content = installPromptHook(spec(PromptHookAgent.CURSOR), null, bin).content;
+    expect(dig(content, 'hooks', 'beforeSubmitPrompt', 0, 'command')).toBe(command);
+    expect(dig(content, 'hooks', 'postToolUse', 0, 'command')).toBe(
+      directHookCommand(bin, toolHookCommand(PromptHookAgent.CURSOR)),
+    );
+    // Installed is installed on any machine: another teammate's path does not rewrite the file.
+    expect(installPromptHook(spec(PromptHookAgent.CURSOR), content, '/other/bin.js').status).toBe(
+      PromptHookStatus.ALREADY,
+    );
+    // PowerShell 5 has no `||`: Copilot's powershell field runs npx alone.
+    const copilot = installPromptHook(spec(PromptHookAgent.COPILOT), null, bin).content;
+    expect(dig(copilot, 'hooks', 'userPromptSubmitted', 0, 'powershell')).toBe(
+      promptHookCommand(PromptHookAgent.COPILOT),
+    );
+    // Uninstall still finds it.
+    expect(uninstallPromptHook(spec(PromptHookAgent.CURSOR), content).content).toBeNull();
+  });
+
+  it('keeps npx alone for a bin path a shell could misread', () => {
+    for (const bad of ['/a "b"/bin.js', '/a/`x`/bin.js', '/a/$(x)/bin.js', 'relative/bin.js']) {
+      expect(directHookCommand(bad, promptHookCommand(PromptHookAgent.CURSOR))).toBe(
+        promptHookCommand(PromptHookAgent.CURSOR),
+      );
+    }
   });
 });
