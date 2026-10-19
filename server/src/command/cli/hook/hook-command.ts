@@ -25,7 +25,7 @@ import { discoverProjectConfigs } from '@/command/cli/config/config-discovery.js
 import { projectSetting } from '@/memory/intent/record-request.js';
 import { capturePrompt, hookAck } from './prompt-hook.js';
 import { captureToolCall, toolHookAck } from './tool-hook.js';
-import { TOOL_WRITE_ACTION } from './hook-fast.js';
+import { AT_FLAG, PROMPT_WRITE_ACTION, TOOL_WRITE_ACTION } from './hook-fast.js';
 import { exportStructure } from './episode-structure.js';
 
 const HookAction = {
@@ -167,11 +167,15 @@ export async function handleHook(
 ): Promise<number> {
   const action = argv[0] ?? HookAction.STATUS;
   const cwd = process.cwd();
-  if (HookAction.PROMPT === action) {
+  // `prompt` normally never reaches here either: the fast path answers it and runs `prompt-write`.
+  if (HookAction.PROMPT === action || PROMPT_WRITE_ACTION === action) {
     const at = argv.indexOf(AGENT_FLAG);
     const agent = (-1 === at ? undefined : argv[at + 1]) ?? DEFAULT_AGENT;
-    capturePrompt(agent, await readStdin(), { cwd, env: process.env, now: () => Date.now() });
-    process.stdout.write(hookAck(agent));
+    // The fast path's writer is told when the prompt arrived; run directly, it is now.
+    const given = Number(argv[argv.indexOf(AT_FLAG) + 1]);
+    const arrived = -1 !== argv.indexOf(AT_FLAG) && Number.isFinite(given) ? given : Date.now();
+    capturePrompt(agent, await readStdin(), { cwd, env: process.env, now: () => arrived });
+    if (HookAction.PROMPT === action) process.stdout.write(hookAck(agent));
     return 0;
   }
   // `tool` normally never reaches here: `bin/reticle.js` answers it on the fast path and runs

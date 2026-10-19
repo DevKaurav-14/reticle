@@ -726,7 +726,7 @@ export function main(): void {
   // `--help` falls through to the parser, which prints what `hook` does.
   if (HOOK_COMMAND === argv[0] && !argv.some((arg) => '--help' === arg || '-h' === arg)) {
     // `tool` too: a hook that fails must never be reported to the agent as its tool failing.
-    const agentHook = ['prompt', 'tool', 'tool-write'].includes(argv[1] ?? '');
+    const agentHook = ['prompt', 'prompt-write', 'tool', 'tool-write'].includes(argv[1] ?? '');
     void handleHook(argv.slice(1))
       .then((code) => process.exit(code))
       // A hook that fails must still let the prompt through, so `prompt` exits 0 whatever happens.

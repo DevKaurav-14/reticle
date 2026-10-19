@@ -12,9 +12,13 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-/** The action the detached writer runs. Not for people: `hook tool` is the public one. */
+/** The actions the detached writers run. Not for people: `hook tool` and `hook prompt` are. */
 export const TOOL_WRITE_ACTION = 'tool-write';
+export const PROMPT_WRITE_ACTION = 'prompt-write';
+/** The prompt's arrival time, handed to its writer: a writer that finishes late is still ordered. */
+export const AT_FLAG = '--at';
 const HOOK_COMMAND = 'hook';
+const PROMPT_ACTION = 'prompt';
 const CURSOR = 'cursor';
 const GEMINI = 'gemini';
 const CODEX = 'codex';
@@ -34,22 +38,51 @@ export function toolHookAck(agent: string, payload = ''): string {
   return CODEX === agent && CODEX_STOP.test(payload) ? '{}\n' : '';
 }
 
+/** What the prompt hook prints. Cursor reads `{ continue }`, Gemini CLI any JSON; the rest nothing. */
+export function promptHookAck(agent: string): string {
+  if (CURSOR === agent) return `${JSON.stringify({ continue: true })}\n`;
+  return GEMINI === agent ? '{}\n' : '';
+}
+
 interface FastIo {
   readStdin: () => Promise<string>;
   write: (text: string) => void;
   /** Start the writer, detached, with `input` on its stdin. Resolves once the input is handed over. */
   spawnWriter: (args: readonly string[], input: string) => Promise<void>;
+  now?: () => number;
 }
 
-export async function runToolHookFast(argv: readonly string[], io: FastIo): Promise<void> {
+const agentOf = (argv: readonly string[]): string => {
   const at = argv.indexOf('--agent');
-  const agent = (-1 === at ? undefined : argv[at + 1]) ?? 'claude-code';
+  return (-1 === at ? undefined : argv[at + 1]) ?? 'claude-code';
+};
+
+export async function runToolHookFast(argv: readonly string[], io: FastIo): Promise<void> {
+  const agent = agentOf(argv);
   const payload = await io.readStdin();
   io.write(toolHookAck(agent, payload));
   try {
     await io.spawnWriter([HOOK_COMMAND, TOOL_WRITE_ACTION, ...argv], payload);
   } catch {
     // A lost record is better than an agent told its tool failed.
+  }
+}
+
+/**
+ * The prompt hook: let the prompt through at once, keep it in a detached writer. The writer gets
+ * the arrival time, so an older prompt never replaces a newer one however the writers finish.
+ */
+export async function runPromptHookFast(argv: readonly string[], io: FastIo): Promise<void> {
+  const arrived = (io.now ?? Date.now)();
+  const payload = await io.readStdin();
+  io.write(promptHookAck(agentOf(argv)));
+  try {
+    await io.spawnWriter(
+      [HOOK_COMMAND, PROMPT_WRITE_ACTION, ...argv, AT_FLAG, String(arrived)],
+      payload,
+    );
+  } catch {
+    // A prompt that is not kept must still go through.
   }
 }
 
@@ -90,13 +123,11 @@ function spawnWriter(args: readonly string[], input: string): Promise<void> {
   });
 }
 
-/** The process entry `bin/reticle.js` calls. Always exits 0. */
-export async function mainToolHookFast(argv: readonly string[]): Promise<void> {
-  await runToolHookFast(argv, {
-    readStdin,
-    write: (text) => process.stdout.write(text),
-    spawnWriter,
-  });
+/** The process entry `bin/reticle.js` calls for `hook tool` or `hook prompt`. Always exits 0. */
+export async function mainHookFast(action: string, argv: readonly string[]): Promise<void> {
+  const io = { readStdin, write: (text: string) => process.stdout.write(text), spawnWriter };
+  if (PROMPT_ACTION === action) await runPromptHookFast(argv, io);
+  else await runToolHookFast(argv, io);
   // Exit only once the answer is flushed: an exit can drop a pipe write still in flight.
   process.stdout.write('', () => process.exit(0));
 }

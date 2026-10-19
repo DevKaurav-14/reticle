@@ -7,7 +7,14 @@
  * reads the payload, answers, hands the payload to a detached writer, and exits.
  */
 import { describe, expect, it } from 'vitest';
-import { TOOL_WRITE_ACTION, runToolHookFast, toolHookAck } from './hook-fast.js';
+import {
+  PROMPT_WRITE_ACTION,
+  TOOL_WRITE_ACTION,
+  promptHookAck,
+  runPromptHookFast,
+  runToolHookFast,
+  toolHookAck,
+} from './hook-fast.js';
 
 describe('the post-tool hook fast path', () => {
   it('answers, hands the payload to a detached writer, and writes nothing itself', async () => {
@@ -48,5 +55,34 @@ describe('the post-tool hook fast path', () => {
     // Codex's Stop needs JSON on stdout when it exits 0; its other hooks need nothing.
     expect(toolHookAck('codex', '{"hook_event_name":"Stop"}')).toBe('{}\n');
     expect(toolHookAck('codex', '{"hook_event_name":"PostToolUse"}')).toBe('');
+  });
+});
+
+/*
+ * The prompt hook stood in front of every prompt the user sent: p50 ~400-600 ms through the full
+ * CLI. It takes the same fast path. The writer is told when the prompt ARRIVED, so a slower writer
+ * that finishes later can never put an older prompt over a newer one.
+ */
+describe('the prompt hook fast path', () => {
+  it('lets the prompt through at once and hands it to a writer with its arrival time', async () => {
+    const out: string[] = [];
+    const spawned: (readonly string[])[] = [];
+    await runPromptHookFast(['--agent', 'cursor'], {
+      readStdin: () => Promise.resolve('{"prompt":"hi"}'),
+      write: (text) => out.push(text),
+      spawnWriter: (args) => {
+        spawned.push(args);
+        return Promise.resolve();
+      },
+      now: () => 1234,
+    });
+    expect(out).toEqual(['{"continue":true}\n']);
+    expect(spawned).toEqual([['hook', PROMPT_WRITE_ACTION, '--agent', 'cursor', '--at', '1234']]);
+  });
+
+  it('answers each agent the way it reads a prompt hook', () => {
+    expect(promptHookAck('cursor')).toBe('{"continue":true}\n');
+    expect(promptHookAck('gemini')).toBe('{}\n');
+    expect(promptHookAck('claude-code')).toBe('');
   });
 });
