@@ -100,4 +100,54 @@ describe('the run as it is synced', () => {
     });
     expect(parsed).toMatchObject({ closingClaim: 'Done.', closingClaimAt: 150 });
   });
+
+  /*
+   * Two Claude Code sessions in one project used to be told apart by nothing: the claim was the
+   * first stop of ANY session of that agent after the run's last call. The run now names the agent
+   * session its MCP connection announced, and only that session's records count.
+   */
+  describe('two sessions of the same agent, interleaved', () => {
+    function twoSessions(agentSession?: string): string {
+      const root = project();
+      const dir = join(root, ReticleDir.EPISODES_SUBDIR);
+      writeFileSync(
+        join(dir, 'agent-s.jsonl'),
+        jsonl([
+          { kind: 'agent_model', agent: 'claude-code', model: 'model-a', at: 5 },
+          { kind: 'agent_stop', agent: 'claude-code', message: { head: 'A done' }, at: 200 },
+        ]),
+      );
+      writeFileSync(
+        join(dir, 'agent-other.jsonl'),
+        jsonl([
+          { kind: 'agent_model', agent: 'claude-code', model: 'model-b', at: 6 },
+          { kind: 'agent_stop', agent: 'claude-code', message: { head: 'B done' }, at: 150 },
+        ]),
+      );
+      writeFileSync(
+        join(root, ReticleDir.RUNS_SUBDIR, 'r1.json'),
+        JSON.stringify({
+          runId: 'r1',
+          createdAt: 100,
+          episodeId: 'conn-1',
+          ...(agentSession === undefined ? {} : { agentSession }),
+          agent: { id: 'claude-code', kind: 'coding-agent' },
+          context: { request: 'x', statements: [], shared: true },
+        }),
+      );
+      return root;
+    }
+
+    it("takes the claim and model from the run's own agent session only", () => {
+      const out = sent(twoSessions('s'));
+      expect((out['agent'] as Record<string, unknown>)['model']).toBe('model-a');
+      expect(out['context']).toMatchObject({ closingClaim: 'A done', closingClaimAt: 200 });
+    });
+
+    it('guesses nothing when the run names no session and two sessions match', () => {
+      const out = sent(twoSessions());
+      expect((out['agent'] as Record<string, unknown>)['model']).toBeUndefined();
+      expect((out['context'] as Record<string, unknown>)['closingClaim']).toBeUndefined();
+    });
+  });
 });

@@ -64,6 +64,8 @@ export interface EpisodeCallInput {
   drivenBy?: DrivenBy;
   /** The events the page emitted between the call's start and its end, already attributed. */
   effect?: readonly ReticleEvent[];
+  /** The coding agent's own session id, as its MCP server announced it. */
+  agentSession?: string;
 }
 
 interface EpisodeLogDeps {
@@ -158,7 +160,10 @@ export function createEpisodeLog(deps: EpisodeLogDeps): EpisodeLog {
   return {
     record: (call) => {
       if (false === deps.enabled) return;
-      noteEpisode(deps.root, deps.episodeId);
+      noteEpisode(deps.root, deps.episodeId, {
+        ...(call.sessionId === undefined ? {} : { sessionId: call.sessionId }),
+        ...(call.agentSession === undefined ? {} : { agentSession: call.agentSession }),
+      });
       n += 1;
       if (1 === n) {
         // The start is taken at the first call: that is when the agent began working through us.
@@ -172,8 +177,9 @@ export function createEpisodeLog(deps: EpisodeLogDeps): EpisodeLog {
             episodeId: deps.episodeId,
             at,
             ...(call.agent === undefined ? {} : { agent: call.agent }),
+            ...(call.agentSession === undefined ? {} : { agentSession: call.agentSession }),
             git: await git(dirname(deps.root)).then((found) => {
-              if ('head' in found) noteEpisode(deps.root, deps.episodeId, found.head);
+              if ('head' in found) noteEpisode(deps.root, deps.episodeId, { head: found.head });
               return found;
             }),
             ...(request === undefined ? {} : { request }),
@@ -294,16 +300,24 @@ const sameAgent = (hook: unknown, run: string): boolean => {
   return a.includes(b) || b.includes(a);
 };
 
+/** The hook file of one agent session: the id as the hook wrote it into the file name. */
+const agentFileOf = (session: string): string =>
+  `${AGENT_FILE_PREFIX}${session.replace(/[^\w-]/g, '_')}.jsonl`;
+
 /**
  * The agent's model and the claim that closed the run's turn, from the agent hooks' records in
- * this project's episodes. The turn is the run's: its claim is the first `agent_stop` of the same
- * agent at or after the run's last Reticle call (from its episode, else its `createdAt`); a later
- * stop belongs to a later turn. The model is the newest `agent_model` record of that agent, or
- * the `model` a tool or stop record carried, at or before that point.
+ * this project's episodes. The turn is the run's: its claim is the first `agent_stop` at or after
+ * the run's last Reticle call (from its episode, else its `createdAt`); a later stop belongs to a
+ * later turn. The model is the newest `agent_model` record, or the `model` a tool or stop record
+ * carried, at or before that point.
+ *
+ * Whose records: the run's own agent session (`agentSession`, announced by its MCP server) when it
+ * names one. Otherwise the same agent's, by name, and only when they all come from one session:
+ * two sessions of one agent in a project and no session on the run is unknown, never a guess.
  */
 export function agentContextFor(
   root: string,
-  run: { episodeId?: unknown; createdAt?: unknown; agent?: unknown },
+  run: { episodeId?: unknown; createdAt?: unknown; agent?: unknown; agentSession?: unknown },
 ): { model?: string; claim?: { text: string; at: number } } {
   const agentId = isJson(run.agent) ? run.agent['id'] : undefined;
   if ('string' !== typeof agentId) return {};
@@ -319,10 +333,16 @@ export function agentContextFor(
   const ends = calls.map((c) => c['endedAt']).filter((t): t is number => 'number' === typeof t);
   const lastCall =
     0 < ends.length ? Math.max(...ends) : 'number' === typeof run.createdAt ? run.createdAt : 0;
-  const records = files
-    .filter((file) => file.startsWith(AGENT_FILE_PREFIX))
-    .flatMap((file) => readLines(join(dir, file)))
-    .filter((r) => sameAgent(r['agent'], agentId))
+  const own = 'string' === typeof run.agentSession ? agentFileOf(run.agentSession) : undefined;
+  const bySession = files
+    .filter((file) => (own === undefined ? file.startsWith(AGENT_FILE_PREFIX) : own === file))
+    .map((file) =>
+      readLines(join(dir, file)).filter((r) => own !== undefined || sameAgent(r['agent'], agentId)),
+    )
+    .filter((lines) => 0 < lines.length);
+  if (1 < bySession.length) return {};
+  const records = bySession
+    .flat()
     .map((r) => ({ r, at: 'number' === typeof r['at'] ? r['at'] : Number(r['endedAt'] ?? 0) }))
     .sort((a, b) => a.at - b.at);
   const stop = records.find(({ r, at }) => AgentRecordKind.STOP === r['kind'] && at >= lastCall);

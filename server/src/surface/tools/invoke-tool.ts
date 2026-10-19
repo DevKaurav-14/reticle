@@ -3,7 +3,7 @@ import { healthEnvelope } from '@/portal/session/session-health.js';
 import { logToolCall, toolLogPath } from '@/hooks/tool-log.js';
 import { nextStep } from './next-step.js';
 import { currentDrivenBy } from '@/hooks/driven-by.js';
-import { agentNameOf, runAsAgent } from '@/hooks/coding-agents.js';
+import { agentNameOf, agentSessionOf, runAsAgent } from '@/hooks/coding-agents.js';
 import { recordEpisodeCall } from '@/memory/journal/episode-log.js';
 import { takeHumanNotes } from './human-notes.js';
 import { takeDriveNotes } from '@/features/harness/drive-runs.js';
@@ -459,6 +459,7 @@ async function loggedTool<Ext>(
           : seen.session.eventsSince(from);
       const drivenBy = currentDrivenBy();
       const agent = agentNameOf(deps.attachId);
+      const agentSession = agentSessionOf(deps.attachId);
       recordEpisodeCall(seen.session?.artifactRoot ?? deps.reticleRoot, deps.attachId, Date.now, {
         tool: tool.name,
         args,
@@ -467,6 +468,7 @@ async function loggedTool<Ext>(
         ...outcome,
         ...(seen.session === undefined ? {} : { sessionId: seen.session.id }),
         ...(agent === undefined ? {} : { agent }),
+        ...(agentSession === undefined ? {} : { agentSession }),
         ...(drivenBy === undefined ? {} : { drivenBy }),
         ...(effect === undefined ? {} : { effect }),
       });

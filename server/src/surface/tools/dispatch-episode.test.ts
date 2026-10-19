@@ -25,6 +25,7 @@ import {
 } from '@/memory/journal/episode-log.js';
 import type { ToolDef, ToolDeps } from './tools.js';
 import { runTool } from './invoke-tool.js';
+import { noteAgentSession } from '@/hooks/coding-agents.js';
 
 describe('the episode log at the dispatcher', () => {
   it('keeps the call, its full result, its tab, and the events it caused', async () => {
@@ -62,6 +63,8 @@ describe('the episode log at the dispatcher', () => {
       },
     };
 
+    // What the MCP attach does when the agent's MCP server announced its session.
+    noteAgentSession('conn-1', 'claude-sess-1');
     // What `attachJournal` does when the daemon starts with the journal on.
     setEpisodeLogEnabled(true);
     await runTool(tool, deps, { selector: 'button' });
@@ -73,7 +76,11 @@ describe('the episode log at the dispatcher', () => {
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(lines[0]?.['kind']).toBe(EpisodeRecordKind.START);
+    expect(lines[0]).toMatchObject({
+      kind: EpisodeRecordKind.START,
+      // The agent session joins this connection to the agent hooks' agent-<session>.jsonl.
+      agentSession: 'claude-sess-1',
+    });
     expect(lines[1]).toMatchObject({
       kind: EpisodeRecordKind.CALL,
       tool: ReticleTool.QUERY,

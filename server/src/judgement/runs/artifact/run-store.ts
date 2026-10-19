@@ -88,7 +88,11 @@ export class RunStore {
    * Guards runId as a safe path segment BEFORE building the path — a runId can originate from a caller
    * (an OEM may set it), so an unsafe value must never escape .reticle/runs/ (mirrors the read guard).
    */
-  async write(given: ReticleVerificationRun): Promise<void> {
+  async write(
+    given: ReticleVerificationRun,
+    /** The tab the run came from, so a run written outside any call still finds its episode. */
+    hint: { sessionId?: string } = {},
+  ): Promise<void> {
     let run = given;
     if (!isValidRunId(run.runId)) {
       throw new Error(`refusing to write run with unsafe runId: ${JSON.stringify(run.runId)}`);
@@ -99,13 +103,15 @@ export class RunStore {
       (await this.#recentRequest(run.createdAt, run.runId)) ??
       (await this.#heldContext(run.runId));
     if (context !== undefined) run = { ...run, context };
-    // The episode this run came from, and the commit it ran against, so it joins exactly.
-    const episode = episodeStampFor(this.#root, callingAttachId());
+    // The episode this run came from, the agent session behind it, and the commit it ran against,
+    // so it joins exactly.
+    const episode = episodeStampFor(this.#root, callingAttachId(), hint.sessionId);
     if (episode !== undefined) {
       const commit = run.project.commit ?? episode.head;
       run = {
         ...run,
         episodeId: episode.episodeId,
+        ...(episode.agentSession === undefined ? {} : { agentSession: episode.agentSession }),
         project: { ...run.project, ...(commit === undefined ? {} : { commit }) },
       };
     }

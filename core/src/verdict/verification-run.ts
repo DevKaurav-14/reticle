@@ -571,6 +571,13 @@ export const ReticleVerificationRunSchema = z.object({
    */
   episodeId: z.string().optional(),
 
+  /**
+   * The coding agent's own session id, as its MCP server announced it (Claude Code's
+   * `CLAUDE_CODE_SESSION_ID`, the `session_id` its hooks receive). Joins the run to the agent
+   * hooks' `agent-<session>.jsonl` exactly, even with two sessions of one agent in a project.
+   */
+  agentSession: z.string().optional(),
+
   trigger: z.object({
     kind: z.nativeEnum(RunTrigger),
     diffRef: z.string().optional(),
