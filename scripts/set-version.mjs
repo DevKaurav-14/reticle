@@ -104,7 +104,8 @@ const RULES = [
   },
   {
     what: 'SKILL.md frontmatter',
-    files: () => tracked('plugin/SKILL.md', 'skills/*/SKILL.md'),
+    // docs/skill.md is the published copy of the skill and declares the version too.
+    files: () => tracked('plugin/SKILL.md', 'skills/*/SKILL.md', 'docs/skill.md'),
     edit: (text, from, to) => text.replace(`version: ${from}`, `version: ${to}`),
   },
   {
