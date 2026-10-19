@@ -261,7 +261,7 @@ export const PROMPT_HOOK_AGENTS: readonly PromptHookSpec[] = [
     // Codex runs a project hook only once its hash is trusted, and skips it silently until then:
     // a headless `codex exec` ran a whole task here on 2026-10-19 and no hook fired.
     activation:
-      'Codex runs these hooks only after you trust them: open `codex` here, type /hooks and trust the Reticle entries (again after an upgrade changes them). Its web search is a hosted tool that no hook sees.',
+      'Codex runs these hooks only after you trust them: open `codex` here, type /hooks and trust the Reticle entries (again after an upgrade changes them). Its web search reaches no hook, so each Reticle hook imports it from the Codex session transcript.',
   },
   {
     id: PromptHookAgent.GEMINI,

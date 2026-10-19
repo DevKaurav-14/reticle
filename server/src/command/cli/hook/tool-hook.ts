@@ -21,6 +21,14 @@ import {
   EPISODE_FILE_VERSION,
 } from '@/memory/journal/episode-log.js';
 import { captureRoots } from './prompt-hook.js';
+import {
+  CODEX_AGENT,
+  codexHome,
+  codexTranscriptPath,
+  codexWebSearches,
+  newCodexSearches,
+  readTranscript,
+} from './codex-transcript.js';
 
 /** The `kind` of a record this hook writes, beside the daemon's `start` and `call`. */
 export const AGENT_TOOL_RECORD = AgentRecordKind.TOOL;
@@ -237,15 +245,29 @@ export function captureToolCall(agent: string, raw: string, io: CaptureIo): { wr
     const info = isObject(payload['tool_info']) ? payload['tool_info'] : {};
     const cwd = text(payload['cwd']) ?? text(roots[0]) ?? text(info['cwd']) ?? io.cwd;
     const record = toolRecordFrom(agent, payload, io.now(), cwd);
-    if (record === undefined) return { written: [] };
-    const session = (readPayload(payload).session ?? UNKNOWN_SESSION).replace(/[^\w-]/g, '_');
-    const line = `${JSON.stringify(record)}\n`;
+    const given = readPayload(payload).session;
+    // Codex's web search reaches no hook: any Codex hook imports it from Codex's own transcript.
+    const transcript =
+      CODEX_AGENT === agent && given !== undefined
+        ? codexTranscriptPath(payload, codexHome(io.env))
+        : undefined;
+    const body = transcript === undefined ? undefined : readTranscript(transcript);
+    const searches =
+      given === undefined || body === undefined ? [] : codexWebSearches(body, given, cwd);
+    if (record === undefined && 0 === searches.length) return { written: [] };
+    const session = (given ?? UNKNOWN_SESSION).replace(/[^\w-]/g, '_');
     const written: string[] = [];
     for (const root of captureRoots(cwd)) {
       if (false === projectSetting(dirname(root), JOURNAL_SETTING)) continue;
       const dir = join(root, ReticleDir.EPISODES_SUBDIR);
       mkdirSync(dir, { recursive: true });
-      appendFileSync(join(dir, `${AGENT_FILE_PREFIX}${session}.jsonl`), line);
+      const file = join(dir, `${AGENT_FILE_PREFIX}${session}.jsonl`);
+      const lines = [
+        ...newCodexSearches(searches, file),
+        ...(record === undefined ? [] : [record]),
+      ];
+      if (0 === lines.length) continue;
+      appendFileSync(file, lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
       written.push(root);
     }
     return { written };
